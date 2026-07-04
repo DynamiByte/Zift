@@ -1,0 +1,11 @@
+.{
+    .name = .Zift,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+    .fingerprint = 0xa63db9716029e31f,
+}
