@@ -91,7 +91,7 @@ pub fn plan(
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
 
-        const rel = try allocator.dupe(u8, entry.path);
+        const rel = try manifestPathFromWalkPath(allocator, entry.path);
         const stat = try entry.dir.statFile(io, entry.basename, .{});
         if (progress) |p| {
             try p.addBytes(stat.size);
@@ -102,7 +102,7 @@ pub fn plan(
         if (manifest.contains(rel)) continue;
         if (!isStreamingAssetsPath(rel)) continue;
 
-        try extras.append(allocator, .{ .path = rel, .size = stat.size });
+        try extras.append(allocator, .{ .path = try allocator.dupe(u8, entry.path), .size = stat.size });
         total_size += stat.size;
     }
 
@@ -110,6 +110,14 @@ pub fn plan(
         .extras = try extras.toOwnedSlice(allocator),
         .total_size = total_size,
     };
+}
+
+fn manifestPathFromWalkPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, path, '\\') == null) return path;
+
+    const normalized = try allocator.dupe(u8, path);
+    std.mem.replaceScalar(u8, normalized, '\\', '/');
+    return normalized;
 }
 
 pub fn deleteExtras(io: std.Io, game_path: []const u8, extras: []const Extra) !void {
