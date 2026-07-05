@@ -198,6 +198,11 @@ pub fn apply(
     const pkg_entry = pkg.find("pkg_version") orelse return error.PackageMissingManifest;
     const pkg_bytes = try zip.extractEntryAlloc(allocator, &reader, pkg_entry, 128 * 1024 * 1024);
     const new_manifest = try manifest_mod.parse(allocator, pkg_bytes);
+    const audio_manifest = try manifest_mod.loadAudio(allocator, io, game_path);
+    const clean_manifest = if (audio_manifest) |audio|
+        try manifest_mod.combine(allocator, new_manifest, audio)
+    else
+        new_manifest;
 
     try validatePackage(pkg, new_manifest, null);
 
@@ -213,7 +218,7 @@ pub fn apply(
         return;
     }
 
-    const extra_plan = try clean.plan(allocator, io, game_path, new_manifest, null);
+    const extra_plan = try clean.plan(allocator, io, game_path, clean_manifest, null);
 
     var payload_size: u64 = 0;
     for (pkg.entries) |entry| payload_size += entry.zip_entry.uncompressed_size;
@@ -263,9 +268,9 @@ pub fn apply(
     };
     try clean_progress.finish();
 
-    try checkAppliedFiles(io, game_path, new_manifest, out);
+    try checkAppliedFiles(io, game_path, clean_manifest, out);
     if (verify_md5) {
-        try verifyAppliedFiles(io, game_path, new_manifest, out);
+        try verifyAppliedFiles(io, game_path, clean_manifest, out);
     }
 
     try out.writeAll("\nComplete!\n");
@@ -287,8 +292,13 @@ fn checkAppliedFiles(
         .total_files = manifest.entries.len,
     };
     try check_progress.start();
-    manifest_mod.checkFileSizes(io, game_path, manifest, &check_progress) catch |err| {
+    var check_failure: manifest_mod.VerifyFailure = .{};
+    manifest_mod.checkFileSizes(io, game_path, manifest, &check_progress, &check_failure) catch |err| {
         try out.writeByte('\n');
+        if (err == error.VerificationFailed) {
+            try manifest_mod.printVerifyFailure(out, check_failure);
+            return error.Reported;
+        }
         return err;
     };
     try check_progress.finish();
@@ -309,8 +319,13 @@ fn verifyAppliedFiles(
         .show_speed = true,
     };
     try verify_progress.start();
-    manifest_mod.verifyFileHashes(io, game_path, manifest, &verify_progress) catch |err| {
+    var verify_failure: manifest_mod.VerifyFailure = .{};
+    manifest_mod.verifyFileHashes(io, game_path, manifest, &verify_progress, &verify_failure) catch |err| {
         try out.writeByte('\n');
+        if (err == error.VerificationFailed) {
+            try manifest_mod.printVerifyFailure(out, verify_failure);
+            return error.Reported;
+        }
         return err;
     };
     try verify_progress.finish();

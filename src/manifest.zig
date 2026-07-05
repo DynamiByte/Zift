@@ -51,6 +51,93 @@ pub fn load(
     return parse(allocator, bytes);
 }
 
+pub fn loadAll(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    game_path: []const u8,
+) !Manifest {
+    const main = load(allocator, io, game_path) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => |e| return e,
+    };
+    const audio = try loadAudio(allocator, io, game_path);
+
+    if (main == null and audio == null) return error.FileNotFound;
+    if (main) |man| {
+        if (audio) |aud| return combine(allocator, man, aud);
+        return man;
+    }
+    return audio.?;
+}
+
+pub fn loadAudio(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    game_path: []const u8,
+) !?Manifest {
+    var game_dir = try std.Io.Dir.cwd().openDir(io, game_path, .{ .iterate = true });
+    defer game_dir.close(io);
+
+    var bytes = std.ArrayList(u8).empty;
+    var found = false;
+
+    var it = game_dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isAudioPkgVersion(entry.name)) continue;
+
+        const data = try readFileAlloc(allocator, io, game_dir, entry.name, 128 * 1024 * 1024);
+        try bytes.appendSlice(allocator, data);
+        try appendNewline(allocator, &bytes);
+        found = true;
+    }
+
+    if (!found) return null;
+    return try parse(allocator, try bytes.toOwnedSlice(allocator));
+}
+
+pub fn combine(
+    allocator: std.mem.Allocator,
+    first: Manifest,
+    second: Manifest,
+) !Manifest {
+    var entries: std.ArrayList(Entry) = .empty;
+    var map: std.StringHashMapUnmanaged(u32) = .empty;
+
+    try appendEntries(allocator, &entries, &map, first.entries);
+    try appendEntries(allocator, &entries, &map, second.entries);
+
+    return .{
+        .entries = try entries.toOwnedSlice(allocator),
+        .map = map,
+        .pkg_bytes = first.pkg_bytes,
+    };
+}
+
+fn appendEntries(
+    allocator: std.mem.Allocator,
+    entries: *std.ArrayList(Entry),
+    map: *std.StringHashMapUnmanaged(u32),
+    source: []const Entry,
+) !void {
+    for (source) |entry| {
+        const got = try map.getOrPut(allocator, entry.path);
+        if (got.found_existing) continue;
+        got.value_ptr.* = @intCast(entries.items.len);
+        try entries.append(allocator, entry);
+    }
+}
+
+fn isAudioPkgVersion(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "Audio_") and std.mem.endsWith(u8, name, "_pkg_version");
+}
+
+fn appendNewline(allocator: std.mem.Allocator, bytes: *std.ArrayList(u8)) !void {
+    if (bytes.items.len == 0 or bytes.items[bytes.items.len - 1] != '\n') {
+        try bytes.append(allocator, '\n');
+    }
+}
+
 pub fn parse(allocator: std.mem.Allocator, bytes: []const u8) !Manifest {
     var entries: std.ArrayList(Entry) = .empty;
     var map: std.StringHashMapUnmanaged(u32) = .empty;
@@ -150,6 +237,52 @@ pub fn readFileAlloc(
     return bytes;
 }
 
+pub const VerifyFailureReason = enum {
+    missing,
+    not_file,
+    size_mismatch,
+    hash_mismatch,
+};
+
+pub const VerifyFailure = struct {
+    path: []const u8 = "",
+    reason: VerifyFailureReason = .missing,
+    expected_size: u64 = 0,
+    actual_size: ?u64 = null,
+};
+
+pub fn printVerifyFailure(out: *std.Io.Writer, failure: VerifyFailure) !void {
+    try out.print("verification failed: {s}", .{failure.path});
+    switch (failure.reason) {
+        .missing => try out.writeAll(" is missing"),
+        .not_file => try out.writeAll(" is not a file"),
+        .size_mismatch => if (failure.actual_size) |actual| {
+            try out.print(" has size {d}, expected {d}", .{ actual, failure.expected_size });
+        } else {
+            try out.print(" has the wrong size, expected {d}", .{failure.expected_size});
+        },
+        .hash_mismatch => try out.writeAll(" has the wrong MD5"),
+    }
+    try out.writeByte('\n');
+}
+
+fn setVerifyFailure(
+    failure: ?*VerifyFailure,
+    path: []const u8,
+    reason: VerifyFailureReason,
+    expected_size: u64,
+    actual_size: ?u64,
+) void {
+    if (failure) |out| {
+        out.* = .{
+            .path = path,
+            .reason = reason,
+            .expected_size = expected_size,
+            .actual_size = actual_size,
+        };
+    }
+}
+
 pub fn hashFile(
     io: std.Io,
     dir: std.Io.Dir,
@@ -178,22 +311,111 @@ pub fn hashFile(
     return .{ .size = stat.size, .md5 = md5 };
 }
 
+pub fn reportFileSizeProblems(
+    io: std.Io,
+    game_path: []const u8,
+    man: Manifest,
+    progress: *fmt.Progress,
+    out: *std.Io.Writer,
+) !u64 {
+    var game_dir = try std.Io.Dir.cwd().openDir(io, game_path, .{ .access_sub_paths = true });
+    defer game_dir.close(io);
+
+    var failures: u64 = 0;
+    for (man.entries) |entry| {
+        const stat = game_dir.statFile(io, entry.path, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                try progress.finishFile();
+                try out.writeByte('\n');
+                try printVerifyFailure(out, .{ .path = entry.path, .reason = .missing, .expected_size = entry.size });
+                failures += 1;
+                continue;
+            },
+            else => |e| return e,
+        };
+        if (stat.kind != .file) {
+            try out.writeByte('\n');
+            try printVerifyFailure(out, .{ .path = entry.path, .reason = .not_file, .expected_size = entry.size });
+            failures += 1;
+        } else if (stat.size != entry.size) {
+            try out.writeByte('\n');
+            try printVerifyFailure(out, .{ .path = entry.path, .reason = .size_mismatch, .expected_size = entry.size, .actual_size = stat.size });
+            failures += 1;
+        }
+        try progress.finishFile();
+    }
+    return failures;
+}
+
+pub fn reportFileHashProblems(
+    io: std.Io,
+    game_path: []const u8,
+    man: Manifest,
+    progress: *fmt.Progress,
+    out: *std.Io.Writer,
+) !u64 {
+    var game_dir = try std.Io.Dir.cwd().openDir(io, game_path, .{ .access_sub_paths = true });
+    defer game_dir.close(io);
+
+    var failures: u64 = 0;
+    for (man.entries) |entry| {
+        const actual = hashFile(io, game_dir, entry.path, progress) catch |err| switch (err) {
+            error.FileNotFound => {
+                try out.writeByte('\n');
+                try printVerifyFailure(out, .{ .path = entry.path, .reason = .missing, .expected_size = entry.size });
+                failures += 1;
+                try progress.finishFile();
+                continue;
+            },
+            error.ExpectedFile => {
+                try out.writeByte('\n');
+                try printVerifyFailure(out, .{ .path = entry.path, .reason = .not_file, .expected_size = entry.size });
+                failures += 1;
+                try progress.finishFile();
+                continue;
+            },
+            else => |e| return e,
+        };
+        if (actual.size != entry.size) {
+            try out.writeByte('\n');
+            try printVerifyFailure(out, .{ .path = entry.path, .reason = .size_mismatch, .expected_size = entry.size, .actual_size = actual.size });
+            failures += 1;
+        } else if (!std.mem.eql(u8, &actual.md5, &entry.md5)) {
+            try out.writeByte('\n');
+            try printVerifyFailure(out, .{ .path = entry.path, .reason = .hash_mismatch, .expected_size = entry.size, .actual_size = actual.size });
+            failures += 1;
+        }
+        try progress.finishFile();
+    }
+    return failures;
+}
+
 pub fn checkFileSizes(
     io: std.Io,
     game_path: []const u8,
     man: Manifest,
     progress: *fmt.Progress,
+    failure: ?*VerifyFailure,
 ) !void {
     var game_dir = try std.Io.Dir.cwd().openDir(io, game_path, .{ .access_sub_paths = true });
     defer game_dir.close(io);
 
     for (man.entries) |entry| {
         const stat = game_dir.statFile(io, entry.path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return error.VerificationFailed,
+            error.FileNotFound => {
+                setVerifyFailure(failure, entry.path, .missing, entry.size, null);
+                return error.VerificationFailed;
+            },
             else => |e| return e,
         };
-        if (stat.kind != .file) return error.VerificationFailed;
-        if (stat.size != entry.size) return error.VerificationFailed;
+        if (stat.kind != .file) {
+            setVerifyFailure(failure, entry.path, .not_file, entry.size, null);
+            return error.VerificationFailed;
+        }
+        if (stat.size != entry.size) {
+            setVerifyFailure(failure, entry.path, .size_mismatch, entry.size, stat.size);
+            return error.VerificationFailed;
+        }
         try progress.finishFile();
     }
 }
@@ -203,14 +425,31 @@ pub fn verifyFileHashes(
     game_path: []const u8,
     man: Manifest,
     progress: *fmt.Progress,
+    failure: ?*VerifyFailure,
 ) !void {
     var game_dir = try std.Io.Dir.cwd().openDir(io, game_path, .{ .access_sub_paths = true });
     defer game_dir.close(io);
 
     for (man.entries) |entry| {
-        const actual = try hashFile(io, game_dir, entry.path, progress);
-        if (actual.size != entry.size) return error.VerificationFailed;
-        if (!std.mem.eql(u8, &actual.md5, &entry.md5)) return error.VerificationFailed;
+        const actual = hashFile(io, game_dir, entry.path, progress) catch |err| switch (err) {
+            error.FileNotFound => {
+                setVerifyFailure(failure, entry.path, .missing, entry.size, null);
+                return error.VerificationFailed;
+            },
+            error.ExpectedFile => {
+                setVerifyFailure(failure, entry.path, .not_file, entry.size, null);
+                return error.VerificationFailed;
+            },
+            else => |e| return e,
+        };
+        if (actual.size != entry.size) {
+            setVerifyFailure(failure, entry.path, .size_mismatch, entry.size, actual.size);
+            return error.VerificationFailed;
+        }
+        if (!std.mem.eql(u8, &actual.md5, &entry.md5)) {
+            setVerifyFailure(failure, entry.path, .hash_mismatch, entry.size, actual.size);
+            return error.VerificationFailed;
+        }
         try progress.finishFile();
     }
 }

@@ -6,9 +6,7 @@ const clean = @import("clean.zig");
 const package = @import("package.zig");
 
 pub fn main(init: std.process.Init) !u8 {
-    var arena_state = std.heap.ArenaAllocator.init(init.gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = init.arena.allocator();
 
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
@@ -40,6 +38,10 @@ pub fn main(init: std.process.Init) !u8 {
     switch (parsed.operation) {
         .clean => |op| clean.run(arena, init.io, op.game, parsed.assume_yes, parsed.verify_md5, stdout) catch |err| {
             if (err == error.Aborted) return 1;
+            if (err == error.Reported) {
+                try stdout.flush();
+                return 1;
+            }
             try stderr.print("Error: {s}\n", .{@errorName(err)});
             try stderr.flush();
             return 1;
@@ -56,6 +58,10 @@ pub fn main(init: std.process.Init) !u8 {
         },
         .apply => |op| package.apply(arena, init.io, op.zip, op.game, parsed.assume_yes, parsed.verify_md5, stdout) catch |err| {
             if (err == error.Aborted) return 1;
+            if (err == error.Reported) {
+                try stdout.flush();
+                return 1;
+            }
             try stderr.print("Error: {s}\n", .{@errorName(err)});
             try stderr.flush();
             return 1;

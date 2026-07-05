@@ -26,7 +26,7 @@ pub fn run(
     verify_md5: bool,
     out: *std.Io.Writer,
 ) !void {
-    const manifest = try manifest_mod.load(allocator, io, game_path);
+    const manifest = try manifest_mod.loadAll(allocator, io, game_path);
     const detected = version.detect(allocator, io, game_path) catch |err| switch (err) {
         error.VersionNotFound => null,
         else => |e| return e,
@@ -79,38 +79,31 @@ pub fn plan(
     manifest: manifest_mod.Manifest,
     progress: ?*fmt.Progress,
 ) !Plan {
-    var game_dir = try std.Io.Dir.cwd().openDir(io, game_path, .{ .access_sub_paths = true });
+    var game_dir = try std.Io.Dir.cwd().openDir(io, game_path, .{ .iterate = true, .access_sub_paths = true });
     defer game_dir.close(io);
 
-    const roots = try manifest_mod.managedRoots(allocator, manifest);
     var extras: std.ArrayList(Extra) = .empty;
     var total_size: u64 = 0;
 
-    for (roots) |root| {
-        var root_dir = game_dir.openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
-            error.FileNotFound, error.NotDir => continue,
-            else => |e| return e,
-        };
-        defer root_dir.close(io);
+    var walker = try game_dir.walk(allocator);
+    defer walker.deinit();
 
-        var walker = try root_dir.walk(allocator);
-        defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
 
-        while (try walker.next(io)) |entry| {
-            if (entry.kind != .file) continue;
-
-            const rel = try joinZipPath(allocator, root, entry.path);
-            const stat = try entry.dir.statFile(io, entry.basename, .{});
-            if (progress) |p| {
-                try p.addBytes(stat.size);
-                try p.finishFile();
-            }
-
-            if (manifest.contains(rel)) continue;
-
-            try extras.append(allocator, .{ .path = rel, .size = stat.size });
-            total_size += stat.size;
+        const rel = try allocator.dupe(u8, entry.path);
+        const stat = try entry.dir.statFile(io, entry.basename, .{});
+        if (progress) |p| {
+            try p.addBytes(stat.size);
+            try p.finishFile();
         }
+
+        if (isPkgVersionFile(rel)) continue;
+        if (manifest.contains(rel)) continue;
+        if (!isStreamingAssetsPath(rel)) continue;
+
+        try extras.append(allocator, .{ .path = rel, .size = stat.size });
+        total_size += stat.size;
     }
 
     return .{
@@ -156,11 +149,13 @@ fn checkOrVerify(
         .total_files = manifest.entries.len,
     };
     try check_progress.start();
-    manifest_mod.checkFileSizes(io, game_path, manifest, &check_progress) catch |err| {
-        try out.writeByte('\n');
-        return err;
-    };
+    const check_failures = try manifest_mod.reportFileSizeProblems(io, game_path, manifest, &check_progress, out);
     try check_progress.finish();
+    if (check_failures != 0) {
+        try out.print("Check found {d} problem", .{check_failures});
+        if (check_failures != 1) try out.writeByte('s');
+        try out.writeAll(".\n");
+    }
 
     if (!verify_md5) return;
 
@@ -173,17 +168,20 @@ fn checkOrVerify(
         .show_speed = true,
     };
     try verify_progress.start();
-    manifest_mod.verifyFileHashes(io, game_path, manifest, &verify_progress) catch |err| {
-        try out.writeByte('\n');
-        return err;
-    };
+    const verify_failures = try manifest_mod.reportFileHashProblems(io, game_path, manifest, &verify_progress, out);
     try verify_progress.finish();
+    if (verify_failures != 0) {
+        try out.print("Verify found {d} problem", .{verify_failures});
+        if (verify_failures != 1) try out.writeByte('s');
+        try out.writeAll(".\n");
+    }
 }
 
-fn joinZipPath(allocator: std.mem.Allocator, root: []const u8, child: []const u8) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    try out.appendSlice(allocator, root);
-    try out.append(allocator, '/');
-    try out.appendSlice(allocator, child);
-    return out.toOwnedSlice(allocator);
+fn isPkgVersionFile(path: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, path, '/') != null) return false;
+    return std.mem.eql(u8, path, "pkg_version") or std.mem.endsWith(u8, path, "_pkg_version");
+}
+
+fn isStreamingAssetsPath(path: []const u8) bool {
+    return std.ascii.indexOfIgnoreCase(path, "StreamingAssets") != null;
 }
