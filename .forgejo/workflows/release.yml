@@ -1,0 +1,313 @@
+name: Release Zift
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zift-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: zig-0.16-alpine
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          github-server-url: https://git.dynamibyte.com
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check release commit
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f build.zig.zon
+          test -f README.md
+          test -f .forgejo/workflows/release-body.md
+
+          mapfile -t declared_versions < <(
+            sed -nE \
+              's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*,[[:space:]]*$/\1/p' \
+              build.zig.zon
+          )
+
+          if [ "${#declared_versions[@]}" -ne 1 ]; then
+            echo 'build.zig.zon must contain exactly one .version entry' >&2
+            exit 1
+          fi
+
+          version="${declared_versions[0]}"
+          subject="$(git log -1 --format=%s)"
+          event_name="${FORGEJO_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
+
+          if [ "$event_name" = "workflow_dispatch" ]; then
+            echo "Manual release requested for $version"
+          else
+            if [[ ! "$subject" =~ ^Bump\ version\ to\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "Not a release commit: $subject"
+              exit 0
+            fi
+
+            title_version="${BASH_REMATCH[1]}"
+
+            if [ "$title_version" != "$version" ]; then
+              echo "Commit says $title_version, but build.zig.zon says $version" >&2
+              exit 1
+            fi
+          fi
+
+          tag="v$version"
+
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            echo "Tag $tag already exists" >&2
+            exit 1
+          fi
+
+          cp \
+            .forgejo/workflows/release-body.md \
+            release-body.generated.md
+
+          printf '\n' >> release-body.generated.md
+
+          if [[ "$subject" =~ ^Bump\ version\ to\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              changelog_end="$(git rev-parse HEAD^)"
+            else
+              changelog_end=""
+            fi
+          else
+            changelog_end="$(git rev-parse HEAD)"
+          fi
+
+          if [ -n "$changelog_end" ]; then
+            previous_bump=""
+
+            while IFS=$'\t' read -r commit title; do
+              if [[ "$title" =~ ^Bump\ version\ to\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                previous_bump="$commit"
+                break
+              fi
+            done < <(
+              git log \
+                --first-parent \
+                --format=$'%H\t%s' \
+                "$changelog_end"
+            )
+
+            if [ -n "$previous_bump" ]; then
+              changelog_range="$previous_bump..$changelog_end"
+            else
+              changelog_range="$changelog_end"
+            fi
+
+            while IFS= read -r title; do
+              [ -n "$title" ] || continue
+              printf -- '- %s\n' "$title" >> release-body.generated.md
+            done < <(
+              git log \
+                --first-parent \
+                --reverse \
+                --format=%s \
+                "$changelog_range"
+            )
+          fi
+
+          {
+            echo "enabled=true"
+            echo "version=$version"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Preparing release $tag"
+
+      - name: Build
+        if: steps.release.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(zig version)" = "0.16.0"
+
+          rm -rf release zig-out
+
+          mkdir -p \
+            release/Zift-Linux-x86-64 \
+            release/Zift-Windows-x86-64
+
+          zig build \
+            -Dtarget=x86_64-linux-musl \
+            -Doptimize=ReleaseSmall
+
+          test -f zig-out/bin/zift
+
+          install -m 0755 \
+            zig-out/bin/zift \
+            release/Zift-Linux-x86-64/zift
+
+          install -m 0644 \
+            README.md \
+            release/Zift-Linux-x86-64/README.md
+
+          rm -rf zig-out
+
+          zig build \
+            -Dtarget=x86_64-windows-gnu \
+            -Doptimize=ReleaseSmall
+
+          test -f zig-out/bin/zift.exe
+
+          install -m 0755 \
+            zig-out/bin/zift.exe \
+            release/Zift-Windows-x86-64/zift.exe
+
+          install -m 0644 \
+            README.md \
+            release/Zift-Windows-x86-64/README.md
+
+          (
+            cd release
+
+            zip -r -6 -Z deflate \
+              Zift-Linux-x86-64.zip \
+              Zift-Linux-x86-64
+
+            zip -r -6 -Z deflate \
+              Zift-Windows-x86-64.zip \
+              Zift-Windows-x86-64
+          )
+
+          unzip -tqq release/Zift-Linux-x86-64.zip
+          unzip -tqq release/Zift-Windows-x86-64.zip
+
+      - name: Publish release
+        if: steps.release.outputs.enabled == 'true'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          : "${FORGEJO_REPOSITORY:?FORGEJO_REPOSITORY is missing}"
+          : "${FORGEJO_SHA:?FORGEJO_SHA is missing}"
+          : "${FORGEJO_TOKEN:?FORGEJO_TOKEN is missing}"
+
+          api="https://git.dynamibyte.com/api/v1/repos/$FORGEJO_REPOSITORY"
+          auth="Authorization: token $FORGEJO_TOKEN"
+
+          response="$(mktemp)"
+          payload="$(mktemp)"
+
+          cleanup() {
+            rm -f "$response" "$payload"
+          }
+
+          trap cleanup EXIT
+
+          status="$(
+            curl \
+              --silent \
+              --show-error \
+              --output "$response" \
+              --write-out '%{http_code}' \
+              --header "$auth" \
+              --header 'Accept: application/json' \
+              "$api/releases/tags/$RELEASE_TAG"
+          )"
+
+          case "$status" in
+            404)
+              ;;
+            200)
+              echo "Release $RELEASE_TAG already exists" >&2
+              exit 1
+              ;;
+            *)
+              cat "$response" >&2
+              echo "Release check returned HTTP $status" >&2
+              exit 1
+              ;;
+          esac
+
+          jq -n \
+            --arg tag "$RELEASE_TAG" \
+            --arg commit "$FORGEJO_SHA" \
+            --arg name "$RELEASE_VERSION" \
+            --rawfile body release-body.generated.md \
+            '{
+              tag_name: $tag,
+              target_commitish: $commit,
+              name: $name,
+              body: $body,
+              draft: false,
+              prerelease: false
+            }' \
+            > "$payload"
+
+          status="$(
+            curl \
+              --silent \
+              --show-error \
+              --request POST \
+              --output "$response" \
+              --write-out '%{http_code}' \
+              --header "$auth" \
+              --header 'Accept: application/json' \
+              --header 'Content-Type: application/json' \
+              --data-binary "@$payload" \
+              "$api/releases"
+          )"
+
+          if [ "$status" != "201" ]; then
+            cat "$response" >&2
+            echo "Creating release returned HTTP $status" >&2
+            exit 1
+          fi
+
+          release_id="$(jq -er '.id' "$response")"
+
+          for archive in \
+            release/Zift-Linux-x86-64.zip \
+            release/Zift-Windows-x86-64.zip
+          do
+            name="${archive##*/}"
+            encoded_name="$(jq -rn --arg name "$name" '$name | @uri')"
+
+            status="$(
+              curl \
+                --silent \
+                --show-error \
+                --request POST \
+                --output "$response" \
+                --write-out '%{http_code}' \
+                --header "$auth" \
+                --header 'Accept: application/json' \
+                --form "attachment=@$archive;type=application/zip" \
+                "$api/releases/$release_id/assets?name=$encoded_name"
+            )"
+
+            case "$status" in
+              200|201)
+                echo "Uploaded $name"
+                ;;
+              *)
+                cat "$response" >&2
+                echo "Uploading $name returned HTTP $status" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "Published $RELEASE_TAG"
