@@ -311,3 +311,8 @@ jobs:
           done
 
           echo "Published $RELEASE_TAG"
+
+  mirror:
+    needs: release
+    uses: ./.forgejo/workflows/mirror.yml
+    secrets: inherit
