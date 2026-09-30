@@ -2,6 +2,7 @@
 
 !/.forgejo/
 !/src/
+!/zstd/
 
 !/.gitignore
 !/build.zig

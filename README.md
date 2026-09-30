@@ -1,33 +1,47 @@
 # Zift
 
-Small update tool for Zenless Zone Zero.
+A swift sifter, written in Zig. Create and apply directory deltas with a focus on small patches, fast apply, and low memory use.
 
 ![Version](https://img.shields.io/badge/version-0.1.2-blue)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green)
 
 ## Usage
 
-```bash
-zift game
-zift update.zip game
-zift old new
-zift old new out.zip
+```sh
+zift directory           # clean supported software
+zift delta directory     # apply a delta
+zift source target       # create a delta
+zift source target out   # create at an output path
+zift source target out.ziff -a -y --source-version 1.0 --target-version 1.1
 ```
 
-- One folder: clean
-- Two folders: make an update ZIP
-- Folder + ZIP: apply
-- Two folders + ZIP path: make with that output path
-- Argument order does not matter
-- `-y` skips the confirmation prompt
-- `-v` additionally verifies MD5 hashes
+Ziff (`.ziff`) is the default format. File Delta and HDiff are also available in ZIP or tar.zst containers.
 
-## Notes
+Optional integrations: Zenless Zone Zero, Genshin Impact, Arknights: Endfield, and Wuthering Waves. Other directories work without an integration. Clean requires a supported integration and its manifest.
 
-- Created update packages are full-file, store-only ZIPs
-- Files are determined by `pkg_version`
-- Apply extracts, removes stale files, then verifies
-- Clean removes extra files, then verifies
+## Options
+
+- `-a` Accept defaults automatically.
+- `-c` Perform a Complete Clean.
+- `-m` Reduce matching memory; creation may take longer.
+- `-y` Skip the final confirmation.
+- `-v` Verify finished file hashes where available; takes more time.
+- `-f` Override Ziff software/version guards and free-space preflight.
+- `-h`, `--help` Show usage.
+
+Creation choices:
+
+- `--integration y|n` Use or skip the detected integration.
+- `--prefix text|n` Set the output-name prefix; `n` omits it.
+- `--source-version text`, `--target-version text` Set the version names.
+- `--method ziff|hdiff[:w26|h13|sf20]|file` Default: Ziff; HDiff variant: W26. Also accepts `1|2|3`.
+- `--format zip-store|zip-deflate[:N]|tar-zstd[:N]` File Delta/HDiff only. Deflate: `1`–`9` (default `1`); Zstd: `1`–`22` (default `3`).
+- `--continue-on-errors y|n` Continue or abort on reported source/target issues.
+- `--correct-target-manifest y|n` Correct reported target entries in the delta.
+
+Explicit choices override `-a`; omitted choices prompt without it. `-a` and `-y` do not approve content issues.
+
+Ctrl+C cancels active work. Interrupted Ziff applies resume on the next run.
 
 ## Building
 
@@ -102,6 +116,6 @@ RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 
 Build with:
 
-```bash
+```sh
 zig build
 ```
