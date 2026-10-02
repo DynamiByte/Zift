@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
   workflow_dispatch:
 
 permissions:
@@ -50,11 +51,13 @@ jobs:
           version="${declared_versions[0]}"
           subject="$(git log -1 --format=%s)"
           event_name="${FORGEJO_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
+          version_pattern='[0-9]+\.[0-9]+\.[0-9]+(-dev\.[0-9]+)?'
+          release_pattern="^Bump version to ($version_pattern)$"
 
           if [ "$event_name" = "workflow_dispatch" ]; then
             echo "Manual release requested for $version"
           else
-            if [[ ! "$subject" =~ ^Bump\ version\ to\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            if [[ ! "$subject" =~ $release_pattern ]]; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "Not a release commit: $subject"
               exit 0
@@ -67,6 +70,26 @@ jobs:
               exit 1
             fi
           fi
+
+          if [[ ! "$version" =~ ^$version_pattern$ ]]; then
+            echo "Unsupported release version: $version" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$version" == *-dev.* ]]; then
+            prerelease=true
+          fi
+
+          branch="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME:-}}"
+          case "$branch:$prerelease" in
+            main:false|dev:true)
+              ;;
+            *)
+              echo "Cannot release $version from $branch (stable: main; dev: dev)" >&2
+              exit 1
+              ;;
+          esac
 
           tag="v$version"
 
@@ -81,7 +104,7 @@ jobs:
 
           printf '\n' >> release-body.generated.md
 
-          if [[ "$subject" =~ ^Bump\ version\ to\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ "$subject" =~ $release_pattern ]]; then
             if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
               changelog_end="$(git rev-parse HEAD^)"
             else
@@ -95,7 +118,7 @@ jobs:
             previous_bump=""
 
             while IFS=$'\t' read -r commit title; do
-              if [[ "$title" =~ ^Bump\ version\ to\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              if [[ "$title" =~ $release_pattern ]]; then
                 previous_bump="$commit"
                 break
               fi
@@ -128,6 +151,7 @@ jobs:
             echo "enabled=true"
             echo "version=$version"
             echo "tag=$tag"
+            echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
           echo "Preparing release $tag"
@@ -197,6 +221,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
           set -euo pipefail
 
@@ -245,6 +270,7 @@ jobs:
             --arg tag "$RELEASE_TAG" \
             --arg commit "$FORGEJO_SHA" \
             --arg name "$RELEASE_VERSION" \
+            --argjson prerelease "$RELEASE_PRERELEASE" \
             --rawfile body release-body.generated.md \
             '{
               tag_name: $tag,
@@ -252,7 +278,7 @@ jobs:
               name: $name,
               body: $body,
               draft: false,
-              prerelease: false
+              prerelease: $prerelease
             }' \
             > "$payload"
 
