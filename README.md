@@ -2,7 +2,7 @@
 
 A swift sifter, written in Zig. Create and apply directory deltas with a focus on small patches, fast apply, and low memory use.
 
-![Version](https://img.shields.io/badge/version-0.1.2-blue)
+![Version](https://img.shields.io/badge/version-1.0.0--dev.1-orange)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green)
 
 ## Usage
