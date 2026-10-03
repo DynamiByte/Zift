@@ -161,15 +161,15 @@ const endfield_manifest_path = manifests.endfield_manifest_path;
 const genshin_beyond_manifest = manifests.genshin_beyond_manifest;
 
 pub fn integrationId(software: Software) u16 {
-    return @intFromEnum(software);
+    return @backingInt(software);
 }
 
 pub fn fromIntegrationId(id: u16) ?Software {
     return switch (id) {
-        @intFromEnum(Software.zzz) => .zzz,
-        @intFromEnum(Software.genshin) => .genshin,
-        @intFromEnum(Software.endfield) => .endfield,
-        @intFromEnum(Software.wuwa) => .wuwa,
+        @backingInt(Software.zzz) => .zzz,
+        @backingInt(Software.genshin) => .genshin,
+        @backingInt(Software.endfield) => .endfield,
+        @backingInt(Software.wuwa) => .wuwa,
         else => null,
     };
 }
@@ -405,7 +405,7 @@ fn unityTemporaryDirectories(allocator: std.mem.Allocator, io: std.Io, root: []c
             if (child.kind != .directory) continue;
             if (!std.ascii.eqlIgnoreCase(child.name, "SDKCaches") and
                 !std.ascii.eqlIgnoreCase(child.name, "webCaches")) continue;
-            try paths.append(allocator, try std.fmt.allocPrint(allocator, "{s}/{s}", .{ entry.name, child.name }));
+            try paths.append(allocator, try allocator.print("{s}/{s}", .{ entry.name, child.name }));
         }
     }
     return paths.toOwnedSlice(allocator);
@@ -472,7 +472,7 @@ fn ignoredWuwaPath(path: []const u8) bool {
 
 fn matchesUnityInstall(io: std.Io, dir: std.Io.Dir, exe: []const u8, data_dir: []const u8, expected_app_info: []const u8) !bool {
     if (!try isFile(io, dir, exe)) return false;
-    const app_info_path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/app.info", .{data_dir});
+    const app_info_path = try std.heap.smp_allocator.print("{s}/app.info", .{data_dir});
     defer std.heap.smp_allocator.free(app_info_path);
     var file = fs.openRead(io, dir, app_info_path) catch |err| switch (err) {
         error.FileNotFound, error.IsDir => return false,
@@ -517,7 +517,7 @@ test "detect zzz" {
 }
 
 test "zzz detection does not follow executable symlinks" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -592,7 +592,7 @@ test "zzz temporary directories are discovered case insensitively" {
 fn writeUnityDetectionFixture(io: std.Io, dir: std.Io.Dir, exe: []const u8, data_dir: []const u8, app_info: []const u8) !void {
     try dir.writeFile(io, .{ .sub_path = exe, .data = "" });
     try dir.createDirPath(io, data_dir);
-    const path = try std.fmt.allocPrint(std.testing.allocator, "{s}/app.info", .{data_dir});
+    const path = try std.testing.allocator.print("{s}/app.info", .{data_dir});
     defer std.testing.allocator.free(path);
     try dir.writeFile(io, .{ .sub_path = path, .data = app_info });
 }
@@ -678,7 +678,7 @@ test "manifest anchor with the wrong type is invalid rather than absent" {
 }
 
 test "manifest anchor symlinks are invalid for every integration" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();

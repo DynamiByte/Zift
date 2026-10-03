@@ -1,7 +1,7 @@
 // ziff payload construction and resumable finalization
 
 const std = @import("std");
-const Thread = @import("../core/thread.zig").Thread;
+const Thread = std.Thread;
 const tree = @import("../tree.zig");
 const content = @import("../core/content.zig");
 const zstd_c = @import("../compression/zstd_c.zig");
@@ -95,8 +95,8 @@ const FullStats = struct {
 };
 
 fn addZar26Stats(total: *zar26.Stats, value: zar26.Stats) void {
-    inline for (@typeInfo(zar26.Stats).@"struct".fields) |field|
-        @field(total, field.name) += @field(value, field.name);
+    inline for (@typeInfo(zar26.Stats).@"struct".field_names) |name|
+        @field(total, name) += @field(value, name);
 }
 
 const SourceSnapshot = struct {
@@ -3021,7 +3021,8 @@ test "serializer worker scratch is not retained with replay recipes" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const bytes = "source bytes retained by the replay recipe" ** 8;
+    const bytes_pattern = "source bytes retained by the replay recipe";
+    const bytes = std.mem.asBytes(&@as([8][bytes_pattern.len]u8, @splat(bytes_pattern.*)));
     try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = bytes });
     try tmp.dir.writeFile(io, .{ .sub_path = "a.bin", .data = bytes });
     try tmp.dir.writeFile(io, .{ .sub_path = "b.bin", .data = bytes });

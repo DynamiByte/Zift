@@ -5,7 +5,7 @@ pub fn available(io: std.Io, directory_path: []const u8) !?u64 {
     var directory = try std.Io.Dir.cwd().openDir(io, directory_path, .{});
     defer directory.close(io);
 
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .linux => linuxAvailable(directory.handle),
         .windows => windowsAvailable(io, directory),
         else => null,
@@ -56,7 +56,7 @@ fn windowsAvailable(io: std.Io, directory: std.Io.Dir) !?u64 {
 }
 
 test "reports available space on supported desktop platforms" {
-    if (builtin.os.tag != .linux and builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux and builtin.target.os.tag != .windows) return error.SkipZigTest;
     const free = try available(std.testing.io, ".");
     try std.testing.expect(free != null);
     try std.testing.expect(free.? > 0);

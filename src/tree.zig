@@ -820,7 +820,7 @@ test "candidate equality uses BLAKE3 rather than manifest MD5" {
 }
 
 test "scan preserves literal backslash on posix" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -890,7 +890,8 @@ test "authoritative claim reread recovers a transient first-pass byte fault" {
 
     const allocator = std.testing.allocator;
     const io = std.testing.io;
-    const bytes = "claimed source bytes for reread " ** 4096;
+    const bytes_pattern = "claimed source bytes for reread ";
+    const bytes = std.mem.asBytes(&@as([4096][bytes_pattern.len]u8, @splat(bytes_pattern.*)));
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDir(io, "source", .default_dir);
@@ -969,7 +970,8 @@ test "scan read progress counts parallel reads without changing file identities"
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const data = "scan content " ** 4096;
+    const data_pattern = "scan content ";
+    const data = std.mem.asBytes(&@as([4096][data_pattern.len]u8, @splat(data_pattern.*)));
     for (0..12) |index| {
         var name_buf: [32]u8 = undefined;
         const name = try std.fmt.bufPrint(&name_buf, "{d}.bin", .{index});

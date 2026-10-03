@@ -119,7 +119,7 @@ pub const Workspace = struct {
                 else => |other| return other,
             };
             errdefer if (created) |directory| {
-                if (builtin.os.tag == .windows)
+                if (builtin.target.os.tag == .windows)
                     fs.deleteOpenDirectoryWindows(directory) catch {};
                 directory.close(self.io);
             };
@@ -151,13 +151,13 @@ pub const Workspace = struct {
             index -= 1;
             const owned = &self.directories.items[index];
             const directory = owned.handle orelse continue;
-            if (builtin.os.tag == .windows)
+            if (builtin.target.os.tag == .windows)
                 fs.deleteOpenDirectoryWindows(directory) catch {};
             directory.close(self.io);
             owned.handle = null;
         }
         if (self.root) |root| {
-            if (builtin.os.tag == .windows)
+            if (builtin.target.os.tag == .windows)
                 fs.deleteOpenDirectoryWindows(root) catch {};
             root.close(self.io);
             self.root = null;
@@ -179,7 +179,7 @@ pub const Workspace = struct {
 
 fn workRootConflicts(candidate: []const u8, paths: []const []const u8) bool {
     for (paths) |path| {
-        if (pathHasRoot(path, candidate, builtin.os.tag == .windows)) return true;
+        if (pathHasRoot(path, candidate, builtin.target.os.tag == .windows)) return true;
     }
     return false;
 }
@@ -253,7 +253,7 @@ pub const MutationSet = struct {
         errdefer self.deinit();
         self.targets = try dupeOwnedPaths(allocator, targets);
         self.removals = try dupeOwnedPaths(allocator, removals);
-        if (builtin.os.tag != .windows) return self;
+        if (builtin.target.os.tag != .windows) return self;
 
         for (targets) |target| {
             const target_index = try self.captureRoute(dir, target, .backup);
@@ -286,7 +286,7 @@ pub const MutationSet = struct {
     }
 
     pub fn validateBindings(self: *const MutationSet, dir: std.Io.Dir) !void {
-        if (builtin.os.tag != .windows) return;
+        if (builtin.target.os.tag != .windows) return;
         for (self.items.items) |item| {
             if (item.present) {
                 const guard = item.guard orelse return error.MutationBindingChanged;
@@ -313,7 +313,7 @@ pub const MutationSet = struct {
         io: std.Io,
         dir: std.Io.Dir,
     ) ![]clean.Extra {
-        if (builtin.os.tag != .windows)
+        if (builtin.target.os.tag != .windows)
             return listedRemovals(allocator, io, dir, self.removalSlices());
         var extras: std.ArrayList(clean.Extra) = .empty;
         for (self.removals) |removal| {
@@ -442,8 +442,7 @@ pub const MutationSet = struct {
         var walker = try sub.walk(self.allocator);
         defer walker.deinit();
         while (try walker.next(self.io)) |entry| {
-            const full = try std.fmt.allocPrint(
-                self.allocator,
+            const full = try self.allocator.print(
                 "{s}/{s}",
                 .{ root_path, entry.path },
             );
@@ -482,8 +481,7 @@ pub const MutationSet = struct {
         var walker = try sub.walk(self.allocator);
         defer walker.deinit();
         while (try walker.next(self.io)) |entry| {
-            const full = try std.fmt.allocPrint(
-                self.allocator,
+            const full = try self.allocator.print(
                 "{s}/{s}",
                 .{ root.logical_path, entry.path },
             );
@@ -565,7 +563,7 @@ fn openedRestorePathAlloc(
     const actual_basename = try fs.windowsOpenedBasenameAlloc(allocator, guard);
     defer allocator.free(actual_basename);
     return if (std.mem.lastIndexOfScalar(u8, logical_path, '/')) |slash|
-        std.fmt.allocPrint(allocator, "{s}/{s}", .{ logical_path[0..slash], actual_basename })
+        allocator.print("{s}/{s}", .{ logical_path[0..slash], actual_basename })
     else
         allocator.dupe(u8, actual_basename);
 }
@@ -603,7 +601,7 @@ pub const Output = struct {
         self.state = .consumed;
         switch (state) {
             .staged => |file| {
-                if (builtin.os.tag == .windows) return fs.discardOpenObjectWindows(io, file);
+                if (builtin.target.os.tag == .windows) return fs.discardOpenObjectWindows(io, file);
                 file.close(io);
             },
             .published => |publication| publication.file.close(io),
@@ -663,7 +661,7 @@ pub const Commit = struct {
         owned_mutations = .{ .allocator = allocator, .io = io };
         errdefer self.deinit();
         try workspace.validateAt(dir);
-        const prepare_result = if (builtin.os.tag == .windows)
+        const prepare_result = if (builtin.target.os.tag == .windows)
             self.prepareCaptured(removals)
         else
             self.prepare(removals);
@@ -721,7 +719,7 @@ pub const Commit = struct {
         try fs.validateGuardedOutput(self.io, guarded, expected_size);
 
         try self.ensureParentTracked(target);
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             fs.renameGuardedOutputBeneath(
                 self.io,
                 self.dir,
@@ -799,7 +797,7 @@ pub const Commit = struct {
     }
 
     pub fn remove(self: *Commit, path: []const u8) !void {
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             for (self.mutations.removals) |removal| {
                 if (!path_util.WindowsCaseContext.eql(.{}, removal, path)) continue;
                 if (try self.removalCoveredByPublishedTargets(path)) return;
@@ -840,7 +838,7 @@ pub const Commit = struct {
     }
 
     pub fn rollback(self: *Commit) !void {
-        if (builtin.os.tag == .windows) return self.rollbackGuardedInWorkspace();
+        if (builtin.target.os.tag == .windows) return self.rollbackGuardedInWorkspace();
         self.closeStagedGuards();
         self.quarantineGuardedPublications() catch {
             self.preserveRecovery() catch {};
@@ -901,7 +899,7 @@ pub const Commit = struct {
                 output.size,
             )) return error.MutationBindingChanged;
         }
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             for (self.mutations.removals) |removal| {
                 if (try self.removalCoveredByPublishedTargets(removal)) continue;
                 var raced = fs.openMetadataBeneathWindows(self.io, self.dir, removal) catch |err| switch (err) {
@@ -921,7 +919,7 @@ pub const Commit = struct {
         defer self.closePublishedGuards();
         defer self.closeCreatedDirectories();
         defer self.closeRetainedDirectories();
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             // workspace-owned backups directory; Commit owns contents only
             self.discardExactBackupObjectsWindows();
             self.closeBackupGuards();
@@ -929,7 +927,7 @@ pub const Commit = struct {
         }
 
         self.closeBackupGuards();
-        const backups_root = std.fmt.allocPrint(self.allocator, "{s}/backups", .{self.workspace.name}) catch return;
+        const backups_root = self.allocator.print("{s}/backups", .{self.workspace.name}) catch return;
         defer self.allocator.free(backups_root);
         self.dir.deleteTree(self.io, backups_root) catch return;
         fs.createDirPathBeneath(self.io, self.dir, backups_root) catch return;
@@ -953,7 +951,7 @@ pub const Commit = struct {
         while (i != 0) {
             i -= 1;
             const item = self.backups.items[i];
-            if (builtin.os.tag == .windows) {
+            if (builtin.target.os.tag == .windows) {
                 if (item.guard) |guard| {
                     var blocked = false;
                     for (blocked_ancestors.items) |ancestor| {
@@ -1023,14 +1021,13 @@ pub const Commit = struct {
         index: usize,
         publication: PublishedGuard,
     ) !void {
-        const quarantine_path = try std.fmt.allocPrint(
-            self.allocator,
+        const quarantine_path = try self.allocator.print(
             "{s}/rollback-{d}",
             .{ self.workspace.name, index },
         );
         defer self.allocator.free(quarantine_path);
 
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             const target = self.outputs[index].path;
             var quarantine_name_buf: [64]u8 = undefined;
             const quarantine_root = try self.workspace.rootDir();
@@ -1164,7 +1161,7 @@ pub const Commit = struct {
                     var new_authority: ?std.Io.File = null;
                     errdefer if (new_authority) |authority| authority.close(self.io);
                     var expected_identity: ?fs.ObjectIdentity = null;
-                    if (builtin.os.tag == .windows) {
+                    if (builtin.target.os.tag == .windows) {
                         expected_identity = self.retainedDirectoryIdentity(prefix) orelse
                             try self.capturedDirectoryIdentity(prefix);
                         if (expected_identity == null) {
@@ -1219,12 +1216,12 @@ pub const Commit = struct {
                 self.created_directories.appendAssumeCapacity(.{
                     .path = prefix,
                     .identity = try fs.openDirIdentity(next),
-                    .handle = if (builtin.os.tag == .windows) next else null,
+                    .handle = if (builtin.target.os.tag == .windows) next else null,
                 });
             }
             if (current_owned) current.close(self.io);
             current = next;
-            current_owned = !created or builtin.os.tag != .windows;
+            current_owned = !created or builtin.target.os.tag != .windows;
             start = end + 1;
         }
     }
@@ -1416,11 +1413,10 @@ pub const Commit = struct {
         const guard = candidate.guard orelse return error.MutationBindingChanged;
         const restore_path = candidate.restore_path orelse return error.MutationBindingChanged;
 
-        const backups_root = try std.fmt.allocPrint(self.allocator, "{s}/backups", .{self.workspace.name});
+        const backups_root = try self.allocator.print("{s}/backups", .{self.workspace.name});
         defer self.allocator.free(backups_root);
 
-        var path: ?[]u8 = try std.fmt.allocPrint(
-            self.allocator,
+        var path: ?[]u8 = try self.allocator.print(
             "{s}/{d}",
             .{ backups_root, self.backups.items.len },
         );
@@ -1530,10 +1526,10 @@ pub const Commit = struct {
     }
 
     fn backup(self: *Commit, original: []const u8) !void {
-        const backups_root = try std.fmt.allocPrint(self.allocator, "{s}/backups", .{self.workspace.name});
+        const backups_root = try self.allocator.print("{s}/backups", .{self.workspace.name});
         defer self.allocator.free(backups_root);
 
-        var path: ?[]u8 = try std.fmt.allocPrint(self.allocator, "{s}/{d}", .{ backups_root, self.backups.items.len });
+        var path: ?[]u8 = try self.allocator.print("{s}/{d}", .{ backups_root, self.backups.items.len });
         errdefer if (path) |owned| self.allocator.free(owned);
         try self.backups.ensureUnusedCapacity(self.allocator, 1);
 
@@ -1652,7 +1648,7 @@ fn guardedObjectPathIdentityMatches(
     path: []const u8,
     guarded: std.Io.File,
 ) bool {
-    if (builtin.os.tag != .windows) return false;
+    if (builtin.target.os.tag != .windows) return false;
     var rebound = fs.openMetadataBeneathWindows(io, root, path) catch return false;
     defer rebound.close(io);
     return fs.sameOpenFile(io, guarded, rebound) catch false;
@@ -1665,7 +1661,7 @@ fn guardedObjectPathIdentityAndBasenameMatches(
     path: []const u8,
     guarded: std.Io.File,
 ) bool {
-    if (builtin.os.tag != .windows) return false;
+    if (builtin.target.os.tag != .windows) return false;
     var rebound = fs.openMetadataBeneathWindows(io, root, path) catch return false;
     defer rebound.close(io);
     if (!(fs.sameOpenFile(io, guarded, rebound) catch return false)) return false;
@@ -1782,7 +1778,7 @@ test "cleanup requires a positively established empty backup token" {
 }
 
 test "Windows workspace root remains pinned until exact cleanup" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1816,7 +1812,7 @@ test "Windows workspace root remains pinned until exact cleanup" {
 }
 
 test "Windows workspace exact cleanup removes only its owned empty tree" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1825,8 +1821,7 @@ test "Windows workspace exact cleanup removes only its owned empty tree" {
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged/deep");
-    const staged_path = try std.fmt.allocPrint(
-        allocator,
+    const staged_path = try allocator.print(
         "{s}/staged/deep/owned.bin",
         .{workspace.name},
     );
@@ -1843,7 +1838,7 @@ test "Windows workspace exact cleanup removes only its owned empty tree" {
 }
 
 test "Windows workspace cleanup preserves unknown entries everywhere" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1852,13 +1847,13 @@ test "Windows workspace cleanup preserves unknown entries everywhere" {
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const root_sentinel = try std.fmt.allocPrint(allocator, "{s}/root.bin", .{workspace.name});
+    const root_sentinel = try allocator.print("{s}/root.bin", .{workspace.name});
     defer allocator.free(root_sentinel);
-    const staged_sentinel = try std.fmt.allocPrint(allocator, "{s}/staged/staged.bin", .{workspace.name});
+    const staged_sentinel = try allocator.print("{s}/staged/staged.bin", .{workspace.name});
     defer allocator.free(staged_sentinel);
-    const backup_sentinel = try std.fmt.allocPrint(allocator, "{s}/backups/backup.bin", .{workspace.name});
+    const backup_sentinel = try allocator.print("{s}/backups/backup.bin", .{workspace.name});
     defer allocator.free(backup_sentinel);
-    const unknown_directory = try std.fmt.allocPrint(allocator, "{s}/unknown-empty", .{workspace.name});
+    const unknown_directory = try allocator.print("{s}/unknown-empty", .{workspace.name});
     defer allocator.free(unknown_directory);
     try tmp.dir.writeFile(io, .{ .sub_path = root_sentinel, .data = "root" });
     try tmp.dir.writeFile(io, .{ .sub_path = staged_sentinel, .data = "stage" });
@@ -1880,7 +1875,7 @@ test "Windows workspace cleanup preserves unknown entries everywhere" {
 }
 
 test "Windows workspace never adopts an untracked raced directory" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1888,7 +1883,7 @@ test "Windows workspace never adopts an untracked raced directory" {
 
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
-    const raced = try std.fmt.allocPrint(allocator, "{s}/staged", .{workspace.name});
+    const raced = try allocator.print("{s}/staged", .{workspace.name});
     defer allocator.free(raced);
     try tmp.dir.createDir(io, raced, .default_dir);
     try std.testing.expectError(error.WorkspaceContaminated, workspace.ensureDirectory("staged"));
@@ -1899,7 +1894,7 @@ test "Windows workspace never adopts an untracked raced directory" {
 }
 
 test "Windows workspace successful directory replacement exact-cleans the backup tree" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1908,7 +1903,7 @@ test "Windows workspace successful directory replacement exact-cleans the backup
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const staged_path = try std.fmt.allocPrint(allocator, "{s}/staged/new.bin", .{workspace.name});
+    const staged_path = try allocator.print("{s}/staged/new.bin", .{workspace.name});
     defer allocator.free(staged_path);
     try tmp.dir.createDirPath(io, "old/deep/empty");
     try tmp.dir.writeFile(io, .{ .sub_path = "old/root.bin", .data = "old root" });
@@ -1941,7 +1936,7 @@ test "Windows workspace successful directory replacement exact-cleans the backup
 }
 
 test "Windows workspace successful finish preserves late unowned backup residue" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1950,7 +1945,7 @@ test "Windows workspace successful finish preserves late unowned backup residue"
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const staged_path = try std.fmt.allocPrint(allocator, "{s}/staged/new.bin", .{workspace.name});
+    const staged_path = try allocator.print("{s}/staged/new.bin", .{workspace.name});
     defer allocator.free(staged_path);
     var raced_path: ?[]u8 = null;
     defer if (raced_path) |path| allocator.free(path);
@@ -1977,7 +1972,7 @@ test "Windows workspace successful finish preserves late unowned backup residue"
         var commit = try Commit.init(allocator, io, tmp.dir, &workspace, &outputs, &removals, &mutations);
         defer commit.deinit();
         const root_backup = commit.backups.items[commit.backups.items.len - 1].path;
-        raced_path = try std.fmt.allocPrint(allocator, "{s}/raced", .{root_backup});
+        raced_path = try allocator.print("{s}/raced", .{root_backup});
         try stale.createDir(io, "raced", .default_dir);
         try commit.publish(0);
         try commit.finish();
@@ -1990,7 +1985,7 @@ test "Windows workspace successful finish preserves late unowned backup residue"
 }
 
 test "Windows captured descendant departure is never pulled into backup or disposed" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1999,7 +1994,7 @@ test "Windows captured descendant departure is never pulled into backup or dispo
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const staged_path = try std.fmt.allocPrint(allocator, "{s}/staged/new.bin", .{workspace.name});
+    const staged_path = try allocator.print("{s}/staged/new.bin", .{workspace.name});
     defer allocator.free(staged_path);
     const guarded = try fs.createGuardedOutputBeneath(io, tmp.dir, staged_path);
     var outputs = [_]Output{.{ .path = "old", .work_rel = staged_path, .size = 0, .state = .{ .staged = guarded } }};
@@ -2033,7 +2028,7 @@ test "Windows captured descendant departure is never pulled into backup or dispo
 }
 
 test "Windows rollback after a partial directory flatten restores the exact tree" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2042,7 +2037,7 @@ test "Windows rollback after a partial directory flatten restores the exact tree
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const staged_path = try std.fmt.allocPrint(allocator, "{s}/staged/new.bin", .{workspace.name});
+    const staged_path = try allocator.print("{s}/staged/new.bin", .{workspace.name});
     defer allocator.free(staged_path);
     const guarded = try fs.createGuardedOutputBeneath(io, tmp.dir, staged_path);
     var outputs = [_]Output{.{ .path = "old", .work_rel = staged_path, .size = 0, .state = .{ .staged = guarded } }};
@@ -2089,7 +2084,7 @@ test "Windows rollback after a partial directory flatten restores the exact tree
 }
 
 test "Windows flattened rollback root conflict preserves every descendant backup" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2098,12 +2093,11 @@ test "Windows flattened rollback root conflict preserves every descendant backup
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const staged_path = try std.fmt.allocPrint(allocator, "{s}/staged/new.bin", .{workspace.name});
+    const staged_path = try allocator.print("{s}/staged/new.bin", .{workspace.name});
     defer allocator.free(staged_path);
-    const quarantine_path = try std.fmt.allocPrint(allocator, "{s}/rollback-0", .{workspace.name});
+    const quarantine_path = try allocator.print("{s}/rollback-0", .{workspace.name});
     defer allocator.free(quarantine_path);
-    const marker_path = try std.fmt.allocPrint(
-        allocator,
+    const marker_path = try allocator.print(
         "{s}/backups/RECOVERY_REQUIRED",
         .{workspace.name},
     );
@@ -2176,7 +2170,7 @@ test "workspace successful finish leaves a removable cleanup token on every plat
     const work_name = try allocator.dupe(u8, workspace.name);
     defer allocator.free(work_name);
     try workspace.ensureDirectory("staged");
-    const staged_path = try std.fmt.allocPrint(allocator, "{s}/staged/new.bin", .{workspace.name});
+    const staged_path = try allocator.print("{s}/staged/new.bin", .{workspace.name});
     defer allocator.free(staged_path);
     try tmp.dir.writeFile(io, .{ .sub_path = "final.bin", .data = "old" });
     const guarded = try fs.createGuardedOutputBeneath(io, tmp.dir, staged_path);
@@ -2204,7 +2198,7 @@ test "workspace successful finish leaves a removable cleanup token on every plat
 }
 
 test "Windows workspace rollback conflict preserves backups quarantine and marker" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2213,15 +2207,15 @@ test "Windows workspace rollback conflict preserves backups quarantine and marke
     var workspace = try Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const staged_one = try std.fmt.allocPrint(allocator, "{s}/staged/one.bin", .{workspace.name});
+    const staged_one = try allocator.print("{s}/staged/one.bin", .{workspace.name});
     defer allocator.free(staged_one);
-    const staged_two = try std.fmt.allocPrint(allocator, "{s}/staged/two.bin", .{workspace.name});
+    const staged_two = try allocator.print("{s}/staged/two.bin", .{workspace.name});
     defer allocator.free(staged_two);
-    const backup_two = try std.fmt.allocPrint(allocator, "{s}/backups/1", .{workspace.name});
+    const backup_two = try allocator.print("{s}/backups/1", .{workspace.name});
     defer allocator.free(backup_two);
-    const quarantine_one = try std.fmt.allocPrint(allocator, "{s}/rollback-0", .{workspace.name});
+    const quarantine_one = try allocator.print("{s}/rollback-0", .{workspace.name});
     defer allocator.free(quarantine_one);
-    const marker = try std.fmt.allocPrint(allocator, "{s}/backups/RECOVERY_REQUIRED", .{workspace.name});
+    const marker = try allocator.print("{s}/backups/RECOVERY_REQUIRED", .{workspace.name});
     defer allocator.free(marker);
     try tmp.dir.writeFile(io, .{ .sub_path = "one.bin", .data = "old one" });
     try tmp.dir.writeFile(io, .{ .sub_path = "two.bin", .data = "old two" });
@@ -2267,7 +2261,7 @@ test "Windows workspace rollback conflict preserves backups quarantine and marke
 }
 
 test "prepared guarded commit refuses objects raced into captured absences" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2308,7 +2302,7 @@ test "prepared guarded commit refuses objects raced into captured absences" {
 }
 
 test "prepared guarded commit pins captured object identity and casing" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2350,7 +2344,7 @@ test "prepared guarded commit pins captured object identity and casing" {
 }
 
 test "raced existing target ancestor retains namespace authority" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2380,7 +2374,7 @@ test "raced existing target ancestor retains namespace authority" {
 }
 
 test "prepared removal refuses a raced replacement and preserves recovery" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2421,7 +2415,7 @@ test "prepared removal refuses a raced replacement and preserves recovery" {
 }
 
 test "prepared absent removal remains an enforced absence" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2461,7 +2455,7 @@ test "prepared absent removal remains an enforced absence" {
 }
 
 test "prepared blocking-ancestor removal is covered by its bound publication" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2523,7 +2517,7 @@ fn testingWorkspace(io: std.Io, dir: std.Io.Dir) !Workspace {
 
 fn testingCleanupWorkspace(io: std.Io, dir: std.Io.Dir, workspace: *Workspace) void {
     workspace.cleanup();
-    if (builtin.os.tag != .windows) cleanupWorkAt(io, dir, workspace.name);
+    if (builtin.target.os.tag != .windows) cleanupWorkAt(io, dir, workspace.name);
 }
 
 fn testingCommit(
@@ -2577,7 +2571,7 @@ test "commit parent tracking reuses target paths through finish and rollback" {
         const published = try tmp.dir.readFileAlloc(io, target_path, std.testing.allocator, .limited(8));
         defer std.testing.allocator.free(published);
         try std.testing.expectEqualStrings("payload", published);
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             if (tmp.dir.rename("existing/new", tmp.dir, "existing/moved", io)) |_| {
                 return error.TestUnexpectedResult;
             } else |err| {
@@ -2640,7 +2634,7 @@ test "commit refuses blocking directory with unlisted files" {
 }
 
 test "commit accepts listed symlink blocking target ancestor" {
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag == .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2671,7 +2665,7 @@ test "commit accepts listed symlink blocking target ancestor" {
 }
 
 test "commit accepts listed symlink inside blocking directory" {
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag == .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2833,7 +2827,7 @@ test "guarded commit owns outputs on initialization errors" {
         ),
     );
     try std.testing.expect(count_outputs[0].state == .consumed);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".zift-work/staged/count.bin", .{}));
     } else {
         try tmp.dir.deleteFile(io, ".zift-work/staged/count.bin");
@@ -2858,7 +2852,7 @@ test "guarded commit owns outputs on initialization errors" {
     );
     try std.testing.expect(missing_outputs[0].state == .consumed);
     try std.testing.expect(missing_outputs[1].state == .consumed);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".zift-work/staged/missing.bin", .{}));
     } else {
         try tmp.dir.deleteFile(io, ".zift-work/staged/missing.bin");
@@ -2883,7 +2877,7 @@ test "guarded commit owns outputs on initialization errors" {
         ),
     );
     try std.testing.expect(prepare_outputs[0].state == .consumed);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".zift-work/staged/prepare.bin", .{}));
     } else {
         try tmp.dir.deleteFile(io, ".zift-work/staged/prepare.bin");
@@ -2893,7 +2887,7 @@ test "guarded commit owns outputs on initialization errors" {
 }
 
 test "guarded backup collision preserves both original and private sentinel" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2931,7 +2925,7 @@ test "guarded backup collision preserves both original and private sentinel" {
 }
 
 test "guarded backup hard-link collision does not masquerade as a completed move" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2977,7 +2971,7 @@ test "guarded backup hard-link collision does not masquerade as a completed move
 }
 
 test "guarded backup remains pinned and restores original Windows casing" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -3025,7 +3019,7 @@ test "guarded backup remains pinned and restores original Windows casing" {
 }
 
 test "guarded rollback distinguishes same-object casing before NTFS coalescing" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -3128,7 +3122,7 @@ test "guarded replacement mismatch retains its staged object until rollback" {
 }
 
 test "guarded replacement refuses a changed POSIX staging binding" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -3174,7 +3168,7 @@ test "guarded replacement refuses a changed POSIX staging binding" {
     try std.testing.expect(outputs[0].state == .consumed);
 
     const restored = try tmp.dir.readFileAlloc(io, "final.bin", allocator, .limited(4));
-    // zig 0.16 readFileAlloc: reached limit rejected; 8-byte sentinel needs limit 9
+    // readFileAlloc rejects a reached limit; 8-byte sentinel needs limit 9
     const sentinel = try tmp.dir.readFileAlloc(io, ".zift-work/staged/new.bin", allocator, .limited(9));
     try std.testing.expectEqualStrings("old", restored);
     try std.testing.expectEqualStrings("sentinel", sentinel);
@@ -3209,7 +3203,7 @@ test "guarded rollback closes every staged object before restoration" {
 
     try commit.rollback();
     try std.testing.expect(outputs[0].state == .consumed);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".zift-work/staged/new.bin", .{}));
     } else {
         try tmp.dir.deleteFile(io, ".zift-work/staged/new.bin");
@@ -3394,7 +3388,7 @@ test "guarded rollback removes its created parents before restoring a blocking f
 }
 
 test "guarded directory rollback preserves a raced child and original backup" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -3436,7 +3430,7 @@ test "guarded directory rollback preserves a raced child and original backup" {
 }
 
 test "guarded publication stays pinned until finish on Windows" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3473,7 +3467,7 @@ test "guarded publication stays pinned until finish on Windows" {
 }
 
 test "guarded finish disposes only exact backups and preserves a raced private sentinel" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -3546,7 +3540,7 @@ test "commit rollback restores removals" {
 }
 
 test "listed removal treats final symlink as the path itself" {
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag == .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();

@@ -1978,7 +1978,8 @@ test "oversized exact cover is pre-split to the requested window bound" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const bytes = "bounded-cover-" ** 8;
+    const bytes_pattern = "bounded-cover-";
+    const bytes = std.mem.asBytes(&@as([8][bytes_pattern.len]u8, @splat(bytes_pattern.*)));
     const bound: u64 = 17;
     try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = bytes });
     try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = bytes });
@@ -2030,7 +2031,8 @@ test "zstd candidate wins only when it is strictly smaller" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const target_bytes = "compressible-body-" ** 8192;
+    const target_bytes_pattern = "compressible-body-";
+    const target_bytes = std.mem.asBytes(&@as([8192][target_bytes_pattern.len]u8, @splat(target_bytes_pattern.*)));
     const prefix = "COMPRESSED-CONTAINER-PREFIX";
     try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = "" });
     try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = target_bytes });
@@ -2419,7 +2421,8 @@ test "payload read failure rolls output back to its exact retry prefix" {
     defer tmp.cleanup();
     const prefix = "retry-prefix-must-survive";
     const source_bytes = "source-size-must-stay-stable";
-    const target_bytes = "literal-only-retry-target" ** 64;
+    const target_bytes_pattern = "literal-only-retry-target";
+    const target_bytes = std.mem.asBytes(&@as([64][target_bytes_pattern.len]u8, @splat(target_bytes_pattern.*)));
     try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = source_bytes });
     try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = target_bytes });
     try tmp.dir.writeFile(io, .{ .sub_path = "patch.bin", .data = prefix });
@@ -2583,7 +2586,7 @@ test "direct Target and Source output aliases are refused before mutation" {
 }
 
 test "Windows hard-link aliases of either input are refused before mutation" {
-    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});

@@ -280,11 +280,11 @@ pub fn run(
     }
 
     const suffix = if (format) |f| switch (method) {
-        .hdiff => try std.fmt.allocPrint(allocator, "-hdiff{s}", .{f.extension()}),
+        .hdiff => try allocator.print("-hdiff{s}", .{f.extension()}),
         else => f.extension(),
     } else ".ziff";
     const out_path = explicit_out orelse try outputName(allocator, prefix, source_name, target_name, suffix);
-    const tmp_path = try std.fmt.allocPrint(allocator, "{s}.part", .{out_path});
+    const tmp_path = try allocator.print("{s}.part", .{out_path});
 
     try printCreateSummary(out, software, source_index_version, target_index_version, method, hdiff_format, source.path, target.path, out_path, plan, source_tree, target_tree);
     if (plan.changed.len == 0 and plan.added.len == 0 and plan.removed.len == 0) {
@@ -511,7 +511,7 @@ fn selectIntegration(allocator: std.mem.Allocator, io: std.Io, out: *std.Io.Writ
     if (automatic) return integrationChoice(detected, true);
 
     try ui.writeField(out, "Detected software:", value.name());
-    const prompt = try std.fmt.allocPrint(allocator, "Use {s} integration?", .{value.name()});
+    const prompt = try allocator.print("Use {s} integration?", .{value.name()});
     return integrationChoice(detected, try cli.promptYesNo(allocator, io, out, prompt, true));
 }
 
@@ -522,15 +522,15 @@ fn integrationChoice(detected: ?integrations.Detected, enabled: bool) ?integrati
 }
 
 fn outputName(allocator: std.mem.Allocator, prefix: ?[]const u8, source_version: []const u8, target_version: []const u8, extension: []const u8) ![]const u8 {
-    if (prefix) |p| return std.fmt.allocPrint(allocator, "{s}-{s}-{s}{s}", .{ p, source_version, target_version, extension });
-    return std.fmt.allocPrint(allocator, "{s}-{s}{s}", .{ source_version, target_version, extension });
+    if (prefix) |p| return allocator.print("{s}-{s}-{s}{s}", .{ p, source_version, target_version, extension });
+    return allocator.print("{s}-{s}{s}", .{ source_version, target_version, extension });
 }
 
 fn resolvedVersion(allocator: std.mem.Allocator, info: ?VersionInfo, chosen: []const u8) ![]const u8 {
     const found = info orelse return allocator.dupe(u8, chosen);
     if (found.parts) |parts| {
         if (std.mem.eql(u8, chosen, parts.number)) return allocator.dupe(u8, found.full);
-        if (std.ascii.isDigit(chosen[0])) return std.fmt.allocPrint(allocator, "{s}{s}", .{ parts.prefix, chosen });
+        if (std.ascii.isDigit(chosen[0])) return allocator.print("{s}{s}", .{ parts.prefix, chosen });
     }
     return allocator.dupe(u8, chosen);
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const interrupt = @import("interrupt.zig");
-const Thread = @import("core/thread.zig").Thread;
+const Thread = std.Thread;
 const scan = @import("core/scan.zig");
 
 const StreamState = struct {
@@ -728,7 +728,7 @@ pub const ReadProgress = struct {
 
 fn terminalColumns(io: std.Io, file: ?std.Io.File) usize {
     const terminal = file orelse return 80;
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux => {
             var size: std.posix.winsize = undefined;
             const rc = std.os.linux.syscall3(.ioctl, @bitCast(@as(isize, terminal.handle)), std.os.linux.T.IOCGWINSZ, @intFromPtr(&size));

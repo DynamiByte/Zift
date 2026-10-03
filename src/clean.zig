@@ -415,7 +415,7 @@ pub fn plan(
 }
 
 fn logicalPathFromWalkPath(path: []const u8, buffer: *[std.fs.max_path_bytes]u8) ![]const u8 {
-    if (builtin.os.tag != .windows or std.mem.indexOfScalar(u8, path, '\\') == null) return path;
+    if (builtin.target.os.tag != .windows or std.mem.indexOfScalar(u8, path, '\\') == null) return path;
     if (path.len > buffer.len) return error.PathTooLongForZip;
     @memcpy(buffer[0..path.len], path);
     const logical = buffer[0..path.len];
@@ -774,7 +774,7 @@ test "temporary clean refuses a directory under a replaced ancestor" {
 }
 
 test "temporary directory deletion does not traverse symlink ancestors" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -875,7 +875,7 @@ fn testingExpected(allocator: std.mem.Allocator, paths: []const []const u8) !man
     var map: std.StringHashMapUnmanaged(u32) = .empty;
     try map.ensureTotalCapacity(allocator, @intCast(paths.len));
     for (paths, 0..) |path, index| {
-        entries[index] = .{ .path = path, .size = 0, .md5 = [_]u8{0} ** 16 };
+        entries[index] = .{ .path = path, .size = 0, .md5 = @splat(0) };
         map.putAssumeCapacity(path, @intCast(index));
     }
     return .{ .entries = entries, .map = map };

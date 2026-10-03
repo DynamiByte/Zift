@@ -1013,8 +1013,8 @@ test "group guarded creator pins more than eight Source and Target inputs" {
     var source_names: [part_count][]const u8 = undefined;
     var target_names: [part_count][]const u8 = undefined;
     for (0..part_count) |index| {
-        source_names[index] = try std.fmt.allocPrint(scratch, "group-create-source-{d}.bin", .{index});
-        target_names[index] = try std.fmt.allocPrint(scratch, "group-create-target-{d}.bin", .{index});
+        source_names[index] = try scratch.print("group-create-source-{d}.bin", .{index});
+        target_names[index] = try scratch.print("group-create-target-{d}.bin", .{index});
         for (&source_data[index], 0..) |*byte, byte_index|
             byte.* = @intCast((index * 47 + byte_index * 23 + 13) % 251);
         target_data[index] = source_data[index];
@@ -1051,7 +1051,7 @@ test "group guarded creator pins more than eight Source and Target inputs" {
     var hostile: [part_size]u8 = undefined;
     @memset(&hostile, 0x5a);
     for (0..part_count) |index| {
-        const saved_source = try std.fmt.allocPrint(scratch, "saved-group-create-source-{d}.bin", .{index});
+        const saved_source = try scratch.print("saved-group-create-source-{d}.bin", .{index});
         if (tmp.dir.rename(source_names[index], tmp.dir, saved_source, io)) |_| {
             try tmp.dir.writeFile(io, .{
                 .sub_path = source_names[index],
@@ -1062,7 +1062,7 @@ test "group guarded creator pins more than eight Source and Target inputs" {
             else => return err,
         }
 
-        const saved_target = try std.fmt.allocPrint(scratch, "saved-group-create-target-{d}.bin", .{index});
+        const saved_target = try scratch.print("saved-group-create-target-{d}.bin", .{index});
         if (tmp.dir.rename(target_names[index], tmp.dir, saved_target, io)) |_| {
             try tmp.dir.writeFile(io, .{
                 .sub_path = target_names[index],
@@ -1104,7 +1104,7 @@ test "group guarded creator pins more than eight Source and Target inputs" {
     var output_opened: usize = 0;
     defer for (output_parts[0..output_opened]) |part| part.file.close(io);
     for (&output_parts, 0..) |*part, index| {
-        const name = try std.fmt.allocPrint(scratch, "group-create-output-{d}.bin", .{index});
+        const name = try scratch.print("group-create-output-{d}.bin", .{index});
         const file = try fs.createGuardedOutputBeneath(io, tmp.dir, name);
         part.* = .{ .file = file, .size = part_size };
         output_opened += 1;

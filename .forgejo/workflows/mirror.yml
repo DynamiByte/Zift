@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   mirror:
-    runs-on: zig-0.16-alpine
+    runs-on: zig-0.17-alpine
     timeout-minutes: 60
 
     env:

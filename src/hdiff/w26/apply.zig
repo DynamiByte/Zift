@@ -1208,7 +1208,7 @@ test "W26 refuses Source and container Target aliases before truncation" {
 }
 
 test "W26 refuses a hard-linked Source Target before truncation" {
-    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     const source_bytes = "abc";

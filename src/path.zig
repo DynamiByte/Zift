@@ -123,7 +123,7 @@ test "logical path rejects unsafe components" {
 }
 
 test "detects symbolic link target ancestor" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});

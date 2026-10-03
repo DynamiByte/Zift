@@ -220,7 +220,7 @@ fn appendDigest(out: *std.ArrayList(u8), allocator: std.mem.Allocator, digest: i
 }
 
 fn appendVerificationHash(out: *std.ArrayList(u8), allocator: std.mem.Allocator, hash: ids.VerificationHash) !void {
-    try out.append(allocator, @intFromEnum(hash.algorithm));
+    try out.append(allocator, @backingInt(hash.algorithm));
     switch (hash.algorithm) {
         .none => {},
         .md5 => try out.appendSlice(allocator, &hash.bytes),
@@ -363,7 +363,7 @@ pub fn encodeDirectory(allocator: std.mem.Allocator, directory: Directory) ![]u8
         if (file.verification.isPresent()) {
             try appendVerificationHash(&section, allocator, file.verification);
         } else {
-            try section.append(allocator, @intFromEnum(ids.VerificationAlgorithm.none));
+            try section.append(allocator, @backingInt(ids.VerificationAlgorithm.none));
             try appendDigest(&section, allocator, file.digest);
         }
         previous = file.path;
@@ -373,7 +373,7 @@ pub fn encodeDirectory(allocator: std.mem.Allocator, directory: Directory) ![]u8
     section.clearRetainingCapacity();
     try wire.appendUleb128(&section, allocator, directory.ops.len);
     for (directory.ops) |op| {
-        try section.append(allocator, @intFromEnum(op.kind));
+        try section.append(allocator, @backingInt(op.kind));
         try wire.appendUleb128(&section, allocator, op.target);
         try wire.appendUleb128(&section, allocator, op.arg);
     }
@@ -382,7 +382,7 @@ pub fn encodeDirectory(allocator: std.mem.Allocator, directory: Directory) ![]u8
     section.clearRetainingCapacity();
     try wire.appendUleb128(&section, allocator, directory.units.len);
     for (directory.units) |unit| {
-        try section.append(allocator, @intFromEnum(unit.kind));
+        try section.append(allocator, @backingInt(unit.kind));
         inline for (.{
             unit.payload_offset,
             unit.payload_len,
@@ -704,7 +704,7 @@ pub fn updateLogicalFingerprint(hasher: *std.crypto.hash.Blake3, file: FileEntry
     var size_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &size_bytes, file.size, .little);
     hasher.update(&size_bytes);
-    hasher.update(&.{@intFromEnum(file.verification.algorithm)});
+    hasher.update(&.{@backingInt(file.verification.algorithm)});
     switch (file.verification.algorithm) {
         .none => hasher.update(&file.digest.bytes),
         .md5 => hasher.update(&file.verification.bytes),

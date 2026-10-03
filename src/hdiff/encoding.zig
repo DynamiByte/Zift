@@ -271,7 +271,7 @@ test "rle0 crosses zero and value boundaries across arbitrary output chunks" {
     // rle0: zero 2, values {1,2,3}, zero 2, value {10}
     const code = [_]u8{ 2, 3, 1, 2, 3, 2, 1, 10 };
     var decoder = Rle0.init(&code);
-    var out = [_]u8{250} ** 8;
+    var out: [8]u8 = @splat(250);
 
     try decoder.addTo(out[0..1]);
     try decoder.addTo(out[1..4]);

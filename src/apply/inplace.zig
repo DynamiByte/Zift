@@ -1,6 +1,6 @@
 // in-place apply with forward recovery
 const std = @import("std");
-const Thread = @import("../core/thread.zig").Thread;
+const Thread = std.Thread;
 const fs = @import("../core/fs.zig");
 const content = @import("../core/content.zig");
 const ids = @import("../core/ids.zig");
@@ -1261,8 +1261,10 @@ test "final verification hashes independent directories with bounded workers" {
     defer tmp.cleanup();
     try tmp.dir.createDir(io, "a", .default_dir);
     try tmp.dir.createDir(io, "b", .default_dir);
-    const a_bytes = "parallel verification alpha" ** 32;
-    const b_bytes = "parallel verification beta" ** 32;
+    const a_bytes_pattern = "parallel verification alpha";
+    const a_bytes = std.mem.asBytes(&@as([32][a_bytes_pattern.len]u8, @splat(a_bytes_pattern.*)));
+    const b_bytes_pattern = "parallel verification beta";
+    const b_bytes = std.mem.asBytes(&@as([32][b_bytes_pattern.len]u8, @splat(b_bytes_pattern.*)));
     try tmp.dir.writeFile(io, .{ .sub_path = "a/file.bin", .data = a_bytes });
     try tmp.dir.writeFile(io, .{ .sub_path = "b/file.bin", .data = b_bytes });
     var files = [_]ziff.FileEntry{
@@ -1298,8 +1300,8 @@ test "final verification hashes independent directories with bounded workers" {
     try runFinalHashes(&context, &groups, &targets);
     try std.testing.expectEqual(@as(u64, a_bytes.len + b_bytes.len), context.stats.final_hash_bytes);
     try std.testing.expectEqual(context.stats.final_hash_bytes, context.stats.final_hash_read_bytes);
-    try tmp.dir.writeFile(io, .{ .sub_path = "a/file.bin", .data = "x" ** a_bytes.len });
-    try tmp.dir.writeFile(io, .{ .sub_path = "b/file.bin", .data = "x" ** b_bytes.len });
+    try tmp.dir.writeFile(io, .{ .sub_path = "a/file.bin", .data = &@as([a_bytes.len]u8, @splat('x')) });
+    try tmp.dir.writeFile(io, .{ .sub_path = "b/file.bin", .data = &@as([b_bytes.len]u8, @splat('x')) });
     try runFinalHashes(&context, &groups, &targets);
     try std.testing.expectEqual(@as(u64, 2), context.stats.errors);
 }
@@ -1313,10 +1315,13 @@ test "failed in-place unit retains later source writers while independent units 
     defer tmp.cleanup();
     try tmp.dir.createDir(io, "source", .default_dir);
     try tmp.dir.createDir(io, "target", .default_dir);
-    const old_a = "old alpha data!" ** 1024;
-    const old_b = "original beta!" ** 1024;
+    const old_a_pattern = "old alpha data!";
+    const old_a = std.mem.asBytes(&@as([1024][old_a_pattern.len]u8, @splat(old_a_pattern.*)));
+    const old_b_pattern = "original beta!";
+    const old_b = std.mem.asBytes(&@as([1024][old_b_pattern.len]u8, @splat(old_b_pattern.*)));
     const new_a = old_b ++ "new tail";
-    const new_b = "completely different beta content" ** 512;
+    const new_b_pattern = "completely different beta content";
+    const new_b = std.mem.asBytes(&@as([512][new_b_pattern.len]u8, @splat(new_b_pattern.*)));
     const new_c = "independent full output";
     try tmp.dir.writeFile(io, .{ .sub_path = "source/a", .data = old_a });
     try tmp.dir.writeFile(io, .{ .sub_path = "source/b", .data = old_b });
@@ -1386,7 +1391,7 @@ test "deferred full units finalize their identities and apply in place" {
     var expected: [fixtures.len]ziff.FileEntry = undefined;
     for (fixtures, &expected) |fixture, *entry| {
         try tmp.dir.writeFile(io, .{
-            .sub_path = try std.fmt.allocPrint(allocator, "target/{s}", .{fixture.path}),
+            .sub_path = try allocator.print("target/{s}", .{fixture.path}),
             .data = fixture.bytes,
         });
         entry.* = .{ .path = fixture.path, .size = fixture.bytes.len, .digest = ids.Digest.of(fixture.bytes) };
@@ -1857,7 +1862,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, package: std.Io.File, opene
     binding.update(&footer);
     var package_id: ids.Digest = undefined;
     binding.final(&package_id.bytes);
-    root.createDir(io, work_name, @enumFromInt(0o700)) catch |err| switch (err) {
+    root.createDir(io, work_name, @fromBackingInt(0o700)) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };

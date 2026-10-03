@@ -118,7 +118,6 @@ test {
     _ = @import("hdiff/encoding.zig");
     _ = @import("compression/decoder.zig");
     _ = @import("hdiff/sf20.zig");
-    _ = @import("core/thread.zig");
     _ = @import("hdiff/h13.zig");
     _ = @import("hdiff/h13/apply.zig");
     _ = @import("hdiff/h13/create.zig");

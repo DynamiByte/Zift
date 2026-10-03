@@ -33,7 +33,7 @@ extern "kernel32" fn GetProcessIoCounters(
 
 // windows: requested reads, including cache hits; elsewhere: zero
 fn requestedReadBytes() u64 {
-    if (builtin.os.tag != .windows) return 0;
+    if (builtin.target.os.tag != .windows) return 0;
     var counters: IoCounters = undefined;
     if (GetProcessIoCounters(std.os.windows.GetCurrentProcess(), &counters) == 0) return 0;
     return counters.read_transfer;
@@ -147,7 +147,7 @@ test "spans accumulate per name and count each span once" {
 }
 
 test "concurrent phase registration keeps one record and all calls" {
-    const Thread = @import("core/thread.zig").Thread;
+    const Thread = std.Thread;
     const Worker = struct {
         fn run(io: std.Io, ready: *std.atomic.Value(usize), start: *std.atomic.Value(bool)) void {
             _ = ready.fetchAdd(1, .release);

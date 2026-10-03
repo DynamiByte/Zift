@@ -37,7 +37,7 @@ pub fn detectUnitySemver(
 ) !?Version {
     var dir = try std.Io.Dir.cwd().openDir(io, root, .{ .access_sub_paths = true });
     defer dir.close(io);
-    const path = try std.fmt.allocPrint(allocator, "{s}/globalgamemanagers", .{data_dir});
+    const path = try allocator.print("{s}/globalgamemanagers", .{data_dir});
     defer allocator.free(path);
     const bytes = try fs.readOptionalFile(allocator, io, dir, path, 256 * 1024) orelse return null;
     defer allocator.free(bytes);
@@ -149,7 +149,7 @@ pub fn detectZzzVersion(allocator: std.mem.Allocator, io: std.Io, root: []const 
     var iterator = dir.iterate();
     while (try iterator.next(io)) |entry| {
         if (entry.kind != .directory or !std.ascii.endsWithIgnoreCase(entry.name, "_Data")) continue;
-        const rel = try std.fmt.allocPrint(allocator, "{s}/resources.assets", .{entry.name});
+        const rel = try allocator.print("{s}/resources.assets", .{entry.name});
         defer allocator.free(rel);
         var file = fs.openRead(io, dir, rel) catch |err| switch (err) {
             error.FileNotFound, error.IsDir => continue,

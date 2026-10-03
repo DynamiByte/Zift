@@ -1,5 +1,5 @@
 const std = @import("std");
-const Thread = @import("../core/thread.zig").Thread;
+const Thread = std.Thread;
 const builtin = @import("builtin");
 const fs = @import("../core/fs.zig");
 const ids = @import("../core/ids.zig");
@@ -699,7 +699,7 @@ test "borrowed stream stays on the retained archive object and leaves it open" {
     var retained = try fs.openReadContentAuthority(io, tmp.dir, "first.tar.zst");
     defer retained.close(io);
     const retained_size = (try retained.stat(io)).size;
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         var namespace_mover = try fs.openMutationAuthorityBeneathWindows(
             io,
             tmp.dir,

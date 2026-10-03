@@ -39,7 +39,7 @@ pub fn create(
     var creation: ui.Operation = .{ .io = io, .writer = out };
     creation.start("Creating");
     defer creation.stop();
-    const spool = try std.fmt.allocPrint(allocator, "{s}.hdiff-spool", .{options.out_path});
+    const spool = try allocator.print("{s}.hdiff-spool", .{options.out_path});
     defer allocator.free(spool);
     try requireMissing(io, spool, options.out_path, out, &creation);
 
@@ -140,7 +140,7 @@ pub fn create(
                 else => return err,
             };
             if (result.patch_size < target_file.size) {
-                const archive_path = try std.fmt.allocPrint(allocator, "{s}.hdiff", .{target_file.path});
+                const archive_path = try allocator.print("{s}.hdiff", .{target_file.path});
                 try bundle.add(.{
                     .path = archive_path,
                     .size = result.patch_size,
@@ -278,7 +278,7 @@ test "all colliding changed files are included as full archive entries" {
         .format = .zip_store,
         .match_block_size = engine.standardMatchBlockSize(false),
         .out_path = out_path,
-        .tmp_path = try std.fmt.allocPrint(allocator, "{s}.part", .{out_path}),
+        .tmp_path = try allocator.print("{s}.part", .{out_path}),
     }, &output.writer);
     var file = try std.Io.Dir.cwd().openFile(io, out_path, .{ .allow_directory = false });
     defer file.close(io);
@@ -299,8 +299,8 @@ test "failed archive creation preserves pre-existing working files" {
     defer tmp.cleanup();
     const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
     const out_path = try std.fs.path.join(allocator, &.{ root, "delta.zip" });
-    const spool = try std.fmt.allocPrint(allocator, "{s}.hdiff-spool", .{out_path});
-    const partial = try std.fmt.allocPrint(allocator, "{s}.part", .{out_path});
+    const spool = try allocator.print("{s}.hdiff-spool", .{out_path});
+    const partial = try allocator.print("{s}.part", .{out_path});
     const empty: tree.Tree = .{ .root = root, .files = &.{}, .map = .empty };
     var output: std.Io.Writer.Allocating = .init(allocator);
     const options: CreateOptions = .{
@@ -362,8 +362,8 @@ test "both standard compression modes publish an HDIFFW26 entry" {
         .{ .compression = .zstd_if_smaller, .name = "zstd" },
     };
     for (cases) |case| {
-        const out_path = try std.fmt.allocPrint(allocator, "{s}/delta-{s}.zip", .{ root, case.name });
-        const tmp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{out_path});
+        const out_path = try allocator.print("{s}/delta-{s}.zip", .{ root, case.name });
+        const tmp_path = try allocator.print("{s}.tmp", .{out_path});
         var output: std.Io.Writer.Allocating = .init(allocator);
         try create(allocator, io, .{
             .source_root = source_root,
@@ -380,7 +380,7 @@ test "both standard compression modes publish an HDIFFW26 entry" {
             .tmp_path = tmp_path,
         }, &output.writer);
 
-        const spool_path = try std.fmt.allocPrint(allocator, "{s}.hdiff-spool", .{out_path});
+        const spool_path = try allocator.print("{s}.hdiff-spool", .{out_path});
         try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, spool_path, .{}));
 
         var file = try std.Io.Dir.cwd().openFile(io, out_path, .{ .allow_directory = false });

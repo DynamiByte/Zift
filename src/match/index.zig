@@ -1,7 +1,7 @@
 // reusable source index; per-target search state
 // matcher based on HDiffPatch; Copyright (c) 2012-2017 HouSisong, MIT
 const std = @import("std");
-const Thread = @import("../core/thread.zig").Thread;
+const Thread = std.Thread;
 const rolling = @import("rolling.zig");
 const index_allocator = std.heap.page_allocator;
 const read_size = 256 * 1024;
@@ -107,7 +107,7 @@ pub const Index = struct {
             return error.InvalidArgument;
         const better = ((source.size +| 63) / 64 +| 63) / 64 * 64;
         const block: usize = @intCast(@max(4, @min(requested_block, better)));
-        const count64 = if (source.size < block) 0 else std.math.divCeil(u64, source.size, block) catch return error.InvalidArgument;
+        const count64 = if (source.size < block) 0 else @divCeil(source.size, block);
         if (count64 > std.math.maxInt(u32)) return error.OutOfMemory;
         const count: usize = @intCast(count64);
         const self = try index_allocator.create(Index);
@@ -282,12 +282,12 @@ pub const Index = struct {
     pub fn search(self: *Index, allocator: std.mem.Allocator, target: Input) anyerror![]Cover {
         if (self.digests.len == 0 or target.size < self.block) return allocator.alloc(Cover, 0);
         const backup = @max(self.block, 256);
-        const new_capacity = std.math.divCeil(usize, self.block * 2 + backup, read_size) catch unreachable;
-        const old_capacity = std.math.divCeil(usize, self.block + backup, read_size) catch unreachable;
+        const new_capacity = @divCeil(self.block * 2 + backup, read_size);
+        const old_capacity = @divCeil(self.block + backup, read_size);
         const scratch = try index_allocator.alloc(u8, (new_capacity + old_capacity) * read_size);
         defer index_allocator.free(scratch);
         var new: Cache = .{ .io = self.io, .input = target, .storage = scratch[0 .. new_capacity * read_size], .capacity = new_capacity * read_size, .min_capacity = new_capacity * read_size, .backup = backup, .block = self.block };
-        const old_min = (std.math.divCeil(usize, self.block + backup, 4096) catch unreachable) * 4096;
+        const old_min = @divCeil(self.block + backup, 4096) * 4096;
         var old: Cache = .{ .io = self.io, .input = self.source, .mutex = &self.source_mutex, .storage = scratch[new_capacity * read_size ..], .capacity = old_min, .min_capacity = old_min, .backup = backup, .block = self.block };
         var covers: std.ArrayList(Cover) = .empty;
         errdefer covers.deinit(allocator);

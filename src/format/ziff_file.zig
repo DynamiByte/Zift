@@ -104,7 +104,7 @@ fn discardCreatedFile(
     sub_path: []const u8,
     file: std.Io.File,
 ) !void {
-    if (builtin.os.tag == .windows) return fs.deleteOpenObjectWindows(file);
+    if (builtin.target.os.tag == .windows) return fs.deleteOpenObjectWindows(file);
     try verifyCreatedBinding(io, dir, sub_path, file);
     try dir.deleteFile(io, sub_path);
 }

@@ -450,7 +450,7 @@ pub fn promptMethod(allocator: std.mem.Allocator, io: std.Io, out: *std.Io.Write
         try ui.writeChoice(out, "1-3");
         if (default) |value| {
             var buf: [8]u8 = undefined;
-            const text = try std.fmt.bufPrint(&buf, "{d}", .{@intFromEnum(value) + 1});
+            const text = try std.fmt.bufPrint(&buf, "{d}", .{@backingInt(value) + 1});
             try out.writeByte(' ');
             try ui.writePromptDefault(out, text);
         }
@@ -480,7 +480,7 @@ pub fn promptFormat(
 ) !ArchiveFormat {
     while (true) {
         var buf: [8]u8 = undefined;
-        const number = try std.fmt.bufPrint(&buf, "{d}", .{@intFromEnum(default) + 1});
+        const number = try std.fmt.bufPrint(&buf, "{d}", .{@backingInt(default) + 1});
         try ui.writePromptLabel(out, "Format");
         try out.writeByte(' ');
         try ui.writeChoice(out, "1-3");
@@ -647,7 +647,7 @@ test "unknown option survives argument iterator teardown" {
     const allocator = buffer_allocator.allocator();
     var environ = std.process.Environ.Map.init(allocator);
     defer environ.deinit();
-    const args: std.process.Args = if (@import("builtin").os.tag == .windows)
+    const args: std.process.Args = if (@import("builtin").target.os.tag == .windows)
         .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral("zift --unrecognized") }
     else
         .{ .vector = &.{ "zift", "--unrecognized" } };
@@ -657,6 +657,7 @@ test "unknown option survives argument iterator teardown" {
 }
 
 test "choice options reject invalid values and inapplicable operations" {
+    @setEvalBranchQuota(10_000);
     const cases = .{
         .{ "zift --method", &.{ "zift", "--method" }, "Error: missing value for --method\n" },
         .{ "zift --method=hdiff:h13", &.{ "zift", "--method=hdiff:h13" }, "Error: unknown option: --method=hdiff:h13\n" },
@@ -693,7 +694,7 @@ test "choice options reject invalid values and inapplicable operations" {
         const allocator = arena.allocator();
         var environ = std.process.Environ.Map.init(allocator);
         defer environ.deinit();
-        const args: std.process.Args = if (@import("builtin").os.tag == .windows)
+        const args: std.process.Args = if (@import("builtin").target.os.tag == .windows)
             .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral(case[0]) }
         else
             .{ .vector = case[1] };
@@ -706,12 +707,13 @@ test "choice options reject invalid values and inapplicable operations" {
 }
 
 test "creation choices preserve explicit values and positional ordering" {
+    @setEvalBranchQuota(10_000);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var environ = std.process.Environ.Map.init(allocator);
     defer environ.deinit();
-    const args: std.process.Args = if (@import("builtin").os.tag == .windows)
+    const args: std.process.Args = if (@import("builtin").target.os.tag == .windows)
         .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral("zift --integration Y . --prefix n --source-version version-one --target-version version-two --method hdiff:HDIFF13 --format tar-zstd:22 --continue-on-errors y --correct-target-manifest N -a -y choice.tar.zst ..") }
     else
         .{ .vector = &.{ "zift", "--integration", "Y", ".", "--prefix", "n", "--source-version", "version-one", "--target-version", "version-two", "--method", "hdiff:HDIFF13", "--format", "tar-zstd:22", "--continue-on-errors", "y", "--correct-target-manifest", "N", "-a", "-y", "choice.tar.zst", ".." } };
@@ -733,7 +735,7 @@ test "creation choices preserve explicit values and positional ordering" {
     try std.testing.expectEqual(false, make.choices.correct_target_manifest.?);
 
     inline for (.{ .{ "1", Method.ziff }, .{ "2", Method.hdiff }, .{ "3", Method.file_delta } }) |case| {
-        const numeric_args: std.process.Args = if (@import("builtin").os.tag == .windows)
+        const numeric_args: std.process.Args = if (@import("builtin").target.os.tag == .windows)
             .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral("zift . . --method " ++ case[0]) }
         else
             .{ .vector = &.{ "zift", ".", ".", "--method", case[0] } };
@@ -742,7 +744,7 @@ test "creation choices preserve explicit values and positional ordering" {
     }
 
     inline for (.{ .{ "hdiff", HDiffFormat.w26 }, .{ "hdiff:w26", HDiffFormat.w26 }, .{ "HDIFF:H13", HDiffFormat.h13 }, .{ "hdiff:sf20", HDiffFormat.sf20 } }) |case| {
-        const variant_args: std.process.Args = if (@import("builtin").os.tag == .windows)
+        const variant_args: std.process.Args = if (@import("builtin").target.os.tag == .windows)
             .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral("zift . . --method " ++ case[0]) }
         else
             .{ .vector = &.{ "zift", ".", ".", "--method", case[0] } };
@@ -758,7 +760,7 @@ test "creation choices preserve explicit values and positional ordering" {
         .{ "tar-zstd:1", FormatChoice{ .tar_zstd = 1 } },
         .{ "TAR-ZSTD:22", FormatChoice{ .tar_zstd = 22 } },
     }) |case| {
-        const format_args: std.process.Args = if (@import("builtin").os.tag == .windows)
+        const format_args: std.process.Args = if (@import("builtin").target.os.tag == .windows)
             .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral("zift . . --method file --format " ++ case[0]) }
         else
             .{ .vector = &.{ "zift", ".", ".", "--method", "file", "--format", case[0] } };

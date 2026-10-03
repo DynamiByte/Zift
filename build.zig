@@ -2,11 +2,11 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize_override = b.option(std.builtin.OptimizeMode, "optimize", "Build optimization mode");
-    const optimize = optimizeOption(b, optimize_override, .ReleaseSmall);
-    const test_optimize = optimizeOption(b, optimize_override, .ReleaseSafe);
-    const debug_linker: ?bool = if (optimize == .Debug) true else null;
-    const test_debug_linker: ?bool = if (test_optimize == .Debug) true else null;
+    const optimize_override = b.option(std.lang.Optimize, "optimize", "Build optimization mode");
+    const optimize = optimizeOption(b, optimize_override, .small);
+    const test_optimize = optimizeOption(b, optimize_override, .safe);
+    const debug_linker: ?bool = if (optimize == .debug) true else null;
+    const test_debug_linker: ?bool = if (test_optimize == .debug) true else null;
 
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
 
     const run_step = b.step("run", "Run zift");
     run_step.dependOn(&run_cmd.step);
@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
     const flow_install = b.addInstallArtifact(flow, .{});
     b.step("flow-build", "Build isolated create/in-place development harness").dependOn(&flow_install.step);
     const flow_run = b.addRunArtifact(flow);
-    if (b.args) |args| flow_run.addArgs(args);
+    flow_run.addPassthruArgs();
     b.step("flow", "Run isolated create/in-place development harness").dependOn(&flow_run.step);
 
     const interop_options = b.addOptions();
@@ -84,15 +84,15 @@ pub fn build(b: *std.Build) void {
 
 fn optimizeOption(
     b: *std.Build,
-    override: ?std.builtin.OptimizeMode,
-    default: std.builtin.OptimizeMode,
-) std.builtin.OptimizeMode {
+    override: ?std.lang.Optimize,
+    default: std.lang.Optimize,
+) std.lang.Optimize {
     if (override) |mode| return mode;
-    return switch (b.release_mode) {
+    return switch (b.graph.release_mode) {
         .off => default,
-        .any, .small => .ReleaseSmall,
-        .fast => .ReleaseFast,
-        .safe => .ReleaseSafe,
+        .any, .small => .small,
+        .fast => .fast,
+        .safe => .safe,
     };
 }
 

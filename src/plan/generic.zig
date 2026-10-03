@@ -200,8 +200,8 @@ test "generic comparison reads only equal-size same-path candidates and keeps pa
         .{ .name = "removed", .old = "removed", .new = null },
     };
     for (cases) |c| {
-        if (c.old) |bytes| try tmp.dir.writeFile(io, .{ .sub_path = try std.fmt.allocPrint(allocator, "source/{s}", .{c.name}), .data = bytes });
-        if (c.new) |bytes| try tmp.dir.writeFile(io, .{ .sub_path = try std.fmt.allocPrint(allocator, "target/{s}", .{c.name}), .data = bytes });
+        if (c.old) |bytes| try tmp.dir.writeFile(io, .{ .sub_path = try allocator.print("source/{s}", .{c.name}), .data = bytes });
+        if (c.new) |bytes| try tmp.dir.writeFile(io, .{ .sub_path = try allocator.print("target/{s}", .{c.name}), .data = bytes });
     }
     const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
     var source = try tree.inventory(allocator, io, try std.fs.path.join(allocator, &.{ root, "source" }), null, null);

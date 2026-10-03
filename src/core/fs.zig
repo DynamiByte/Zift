@@ -5,43 +5,22 @@ const builtin = @import("builtin");
 const logical_path = @import("../path.zig");
 const windows = std.os.windows;
 
-pub const ExistingMode = enum {
-    read_only,
-    write_only,
-    read_write,
-
-    fn wantsRead(mode: ExistingMode) bool {
-        return mode != .write_only;
-    }
-
-    fn wantsWrite(mode: ExistingMode) bool {
-        return mode != .read_only;
-    }
-};
-
 pub fn openExisting(
     io: std.Io,
     dir: std.Io.Dir,
     sub_path: []const u8,
-    mode: ExistingMode,
+    mode: std.Io.Dir.OpenFileOptions.Mode,
 ) std.Io.File.OpenError!std.Io.File {
-    if (builtin.os.tag != .windows) {
-        return dir.openFile(io, sub_path, .{
-            .mode = switch (mode) {
-                .read_only => .read_only,
-                .write_only => .write_only,
-                .read_write => .read_write,
-            },
-            .allow_directory = false,
-            .follow_symlinks = false,
-        });
-    }
-    return openExistingWindows(io, dir, sub_path, mode);
+    return dir.openFile(io, sub_path, .{
+        .mode = mode,
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
 }
 
 // linux O_PATH: no sync; windows directory flush: write access required
 pub fn syncDirectory(io: std.Io, dir: std.Io.Dir) !void {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const path_space = try std.Io.Threaded.sliceToPrefixedFileW(dir.handle, ".", .{});
         const wide = path_space.span();
         var handle: windows.HANDLE = undefined;
@@ -148,7 +127,7 @@ fn openRetainedReadAuthority(
     sub_path: []const u8,
     allow_namespace_changes: bool,
 ) !std.Io.File {
-    var file = if (builtin.os.tag == .windows)
+    var file = if (builtin.target.os.tag == .windows)
         try openReadAuthorityWindows(io, dir, sub_path, allow_namespace_changes)
     else
         try openRead(io, dir, sub_path);
@@ -163,7 +142,7 @@ pub fn openMetadataNoFollow(
     dir: std.Io.Dir,
     sub_path: []const u8,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     if (std.mem.eql(u8, sub_path, ".") or std.mem.eql(u8, sub_path, "..")) return error.BadPathName;
 
     const path_space = try std.Io.Threaded.sliceToPrefixedFileW(dir.handle, sub_path, .{});
@@ -230,12 +209,12 @@ pub const WindowsFileIdentity = struct {
 };
 
 pub fn windowsFileIdentity(file: std.Io.File) !WindowsFileIdentity {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     return windowsHandleIdentity(file.handle);
 }
 
 pub fn windowsDirIdentity(dir: std.Io.Dir) !WindowsFileIdentity {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     return windowsHandleIdentity(dir.handle);
 }
 
@@ -244,7 +223,7 @@ pub fn windowsOpenedBasenameAlloc(
     allocator: std.mem.Allocator,
     file: std.Io.File,
 ) ![]u8 {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     const wide_buffer = try allocator.alloc(u16, windows.PATH_MAX_WIDE);
     defer allocator.free(wide_buffer);
     const full = try std.Io.Threaded.GetFinalPathNameByHandle(file.handle, .{}, wide_buffer);
@@ -276,12 +255,12 @@ pub const ObjectIdentity = union(enum) {
 };
 
 pub fn openFileIdentity(file: std.Io.File) !ObjectIdentity {
-    if (builtin.os.tag == .windows) return .{ .windows = try windowsFileIdentity(file) };
+    if (builtin.target.os.tag == .windows) return .{ .windows = try windowsFileIdentity(file) };
     return .{ .posix = try posixHandleIdentity(file.handle) };
 }
 
 pub fn openDirIdentity(dir: std.Io.Dir) !ObjectIdentity {
-    if (builtin.os.tag == .windows) return .{ .windows = try windowsDirIdentity(dir) };
+    if (builtin.target.os.tag == .windows) return .{ .windows = try windowsDirIdentity(dir) };
     return .{ .posix = try posixHandleIdentity(dir.handle) };
 }
 
@@ -296,7 +275,7 @@ pub const PosixFileIdentity = struct {
 };
 
 fn posixHandleIdentity(handle: anytype) !PosixFileIdentity {
-    if (builtin.os.tag == .linux) return linuxHandleIdentity(handle);
+    if (builtin.target.os.tag == .linux) return linuxHandleIdentity(handle);
 
     var stat = std.mem.zeroes(std.c.Stat);
     while (true) switch (std.c.errno(std.c.fstat(handle, &stat))) {
@@ -337,7 +316,7 @@ fn linuxHandleIdentity(handle: anytype) !PosixFileIdentity {
 }
 
 fn unsignedIntegerBits(value: anytype) u128 {
-    const Unsigned = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(value)));
+    const Unsigned = @Int(.unsigned, @bitSizeOf(@TypeOf(value)));
     return @as(Unsigned, @bitCast(value));
 }
 
@@ -354,7 +333,7 @@ pub fn validateGuardedOutput(io: std.Io, file: std.Io.File, expected_size: u64) 
 }
 
 fn guardedOutputIsWritable(file: std.Io.File) !bool {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         var io_status: windows.IO_STATUS_BLOCK = undefined;
         var access: windows.FILE.ACCESS_INFORMATION = undefined;
         switch (windows.ntdll.NtQueryInformationFile(
@@ -379,7 +358,7 @@ fn guardedOutputIsWritable(file: std.Io.File) !bool {
         );
         switch (std.posix.errno(rc)) {
             .SUCCESS => {
-                const FlagsInt = std.meta.Int(.unsigned, @bitSizeOf(std.posix.O));
+                const FlagsInt = @Int(.unsigned, @bitSizeOf(std.posix.O));
                 const flags: std.posix.O = @bitCast(@as(FlagsInt, @intCast(rc)));
                 return flags.ACCMODE != .RDONLY;
             },
@@ -441,7 +420,7 @@ pub fn openMetadataBeneathWindows(
     root: std.Io.Dir,
     sub_path: []const u8,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, sub_path);
     defer parent.close(io);
     return openMetadataNoFollow(io, parent.dir, parent.basename);
@@ -453,7 +432,7 @@ pub fn openBackupAuthorityBeneathWindows(
     root: std.Io.Dir,
     sub_path: []const u8,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, sub_path);
     defer parent.close(io);
     return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{ .READ = true }, false);
@@ -465,7 +444,7 @@ pub fn openMutationAuthorityBeneathWindows(
     root: std.Io.Dir,
     sub_path: []const u8,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, sub_path);
     defer parent.close(io);
     return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{
@@ -480,7 +459,7 @@ pub fn openMutationDirectoryAuthorityBeneathWindows(
     root: std.Io.Dir,
     sub_path: []const u8,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, sub_path);
     defer parent.close(io);
     return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{
@@ -507,7 +486,7 @@ pub const EntryInfo = struct {
 
 // windows statFile: extra open per entry; pinned-parent query instead
 pub fn queryEntryBeneath(io: std.Io, dir: std.Io.Dir, name: []const u8) !EntryInfo {
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         const stat = try dir.statFile(io, name, .{ .follow_symlinks = false });
         return .{ .kind = stat.kind, .size = stat.size };
     }
@@ -653,9 +632,9 @@ pub fn createGuardedDirectory(
 ) !std.Io.Dir {
     try logical_path.validate(basename);
     if (std.mem.indexOfScalar(u8, basename, '/') != null) return error.UnsafePath;
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         // owner-only access to transaction objects
-        try parent.createDir(io, basename, @enumFromInt(0o700));
+        try parent.createDir(io, basename, @fromBackingInt(0o700));
         return parent.openDir(io, basename, .{
             .access_sub_paths = true,
             .follow_symlinks = false,
@@ -666,13 +645,13 @@ pub fn createGuardedDirectory(
 
 // delete pending on success; close immediately
 pub fn deleteOpenDirectoryWindows(directory: std.Io.Dir) !void {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     return deleteOpenHandleWindows(directory.handle);
 }
 
 // atomic rejection of nonempty directories
 pub fn deleteOpenObjectWindows(object: std.Io.File) !void {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     return deleteOpenHandleWindows(object.handle);
 }
 
@@ -719,7 +698,7 @@ pub fn createGuardedOutput(
     dir: std.Io.Dir,
     sub_path: []const u8,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         return dir.createFile(io, sub_path, .{
             .read = true,
             .truncate = false,
@@ -735,12 +714,12 @@ pub fn createConstructionOutput(
     dir: std.Io.Dir,
     sub_path: []const u8,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         return dir.createFile(io, sub_path, .{
             .read = true,
             .truncate = false,
             .exclusive = true,
-            .permissions = @enumFromInt(0o600),
+            .permissions = @fromBackingInt(0o600),
         });
     }
     return createGuardedOutputWindows(io, dir, sub_path);
@@ -768,8 +747,7 @@ pub const PrivateConstructionOutput = struct {
             var random: [16]u8 = undefined;
             try io.randomSecure(&random);
             const encoded = std.fmt.bytesToHex(random, .lower);
-            const directory_name = try std.fmt.allocPrint(
-                allocator,
+            const directory_name = try allocator.print(
                 ".zift-create-{s}",
                 .{&encoded},
             );
@@ -784,7 +762,7 @@ pub const PrivateConstructionOutput = struct {
             };
             var directory_owned = true;
             errdefer if (directory_owned) {
-                if (builtin.os.tag == .windows)
+                if (builtin.target.os.tag == .windows)
                     deleteOpenDirectoryWindows(directory) catch {}
                 else if (privateDirectoryBindingMatches(io, parent, directory_name, directory))
                     parent.deleteDir(io, directory_name) catch {};
@@ -840,7 +818,7 @@ pub const PrivateConstructionOutput = struct {
         const directory = self.directory;
         if (self.output) |output| {
             if (!self.published) {
-                if (builtin.os.tag == .windows)
+                if (builtin.target.os.tag == .windows)
                     deleteOpenObjectWindows(output) catch {}
                 else if (directory) |dir| {
                     // contamination: preserve workspace
@@ -857,7 +835,7 @@ pub const PrivateConstructionOutput = struct {
         }
 
         if (directory) |dir| {
-            if (builtin.os.tag == .windows)
+            if (builtin.target.os.tag == .windows)
                 deleteOpenDirectoryWindows(dir) catch {}
             else if (privateDirectoryBindingMatches(self.io, self.parent, self.directory_name, dir))
                 self.parent.deleteDir(self.io, self.directory_name) catch {};
@@ -921,7 +899,7 @@ pub fn publishConstructionOutput(
     expected_size: u64,
 ) !void {
     try requireConstructionOutputBinding(io, staging_dir, staging_name, authority, expected_size);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         renameGuardedOutputBeneath(io, final_dir, final_name, authority, expected_size) catch |err| {
             if (err != error.PublishedBindingChanged) return err;
             // rename complete; rollback by retained object
@@ -961,7 +939,7 @@ pub fn renameGuardedOutputBeneath(
     guarded: std.Io.File,
     expected_size: u64,
 ) !void {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     try validateGuardedOutput(io, guarded, expected_size);
 
     var parent = try openParentBeneath(io, root, target_sub_path);
@@ -987,7 +965,7 @@ pub fn renameOpenFileBeneathWindows(
     target_sub_path: []const u8,
     file: std.Io.File,
 ) !void {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, target_sub_path);
     defer parent.close(io);
     try renameGuardedOutputWindows(file, parent.dir, parent.basename);
@@ -1006,7 +984,7 @@ pub fn renameOpenObjectBeneathWindows(
     target_sub_path: []const u8,
     object: std.Io.File,
 ) !void {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, target_sub_path);
     defer parent.close(io);
     try renameGuardedOutputWindows(object, parent.dir, parent.basename);
@@ -1039,7 +1017,7 @@ pub fn openOrCreateReadWrite(
     dir: std.Io.Dir,
     sub_path: []const u8,
 ) std.Io.File.OpenError!std.Io.File {
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         return dir.createFile(io, sub_path, .{ .read = true, .truncate = false });
     }
     if (std.mem.eql(u8, sub_path, ".") or std.mem.eql(u8, sub_path, "..")) return error.IsDir;
@@ -1099,82 +1077,13 @@ pub fn openOrCreateReadWrite(
     }
 }
 
-// zig 0.16.0: no-follow opens create async handles marked blocking
-// synchronous NT open avoids STATUS_PENDING reaching unreachable
-fn openExistingWindows(
-    io: std.Io,
-    dir: std.Io.Dir,
-    sub_path: []const u8,
-    mode: ExistingMode,
-) std.Io.File.OpenError!std.Io.File {
-    if (std.mem.eql(u8, sub_path, ".") or std.mem.eql(u8, sub_path, "..")) return error.IsDir;
-
-    const path_space = try std.Io.Threaded.sliceToPrefixedFileW(dir.handle, sub_path, .{});
-    const wide = path_space.span();
-    const root: ?windows.HANDLE = if (std.Io.Dir.path.isAbsoluteWindowsWtf16(wide)) null else dir.handle;
-
-    var io_status_block: windows.IO_STATUS_BLOCK = undefined;
-    var handle: windows.HANDLE = undefined;
-    var attempt: u5 = 0;
-
-    while (true) {
-        const status = windows.ntdll.NtCreateFile(
-            &handle,
-            .{
-                .STANDARD = .{ .SYNCHRONIZE = true },
-                .GENERIC = .{
-                    .READ = mode.wantsRead(),
-                    .WRITE = mode.wantsWrite(),
-                },
-            },
-            &.{
-                .RootDirectory = root,
-                .ObjectName = @constCast(&windows.UNICODE_STRING.init(wide)),
-            },
-            &io_status_block,
-            null,
-            .{ .NORMAL = true },
-            .VALID_FLAGS,
-            .OPEN,
-            .{
-                .IO = .SYNCHRONOUS_NONALERT,
-                .NON_DIRECTORY_FILE = true,
-                .OPEN_REPARSE_POINT = true,
-            },
-            null,
-            0,
-        );
-
-        switch (status) {
-            .SUCCESS => return .{ .handle = handle, .flags = .{ .nonblocking = false } },
-            .OBJECT_NAME_INVALID, .OBJECT_PATH_SYNTAX_BAD => return error.BadPathName,
-            .OBJECT_NAME_NOT_FOUND, .OBJECT_PATH_NOT_FOUND => return error.FileNotFound,
-            .BAD_NETWORK_PATH, .BAD_NETWORK_NAME => return error.NetworkNotFound,
-            .NO_MEDIA_IN_DEVICE, .PIPE_NOT_AVAILABLE => return error.NoDevice,
-            .PIPE_BUSY => return error.PipeBusy,
-            .ACCESS_DENIED, .USER_MAPPED_FILE => return error.AccessDenied,
-            .FILE_IS_A_DIRECTORY => return error.IsDir,
-            .NOT_A_DIRECTORY => return error.NotDir,
-            .OBJECT_NAME_COLLISION => return error.PathAlreadyExists,
-            .VIRUS_INFECTED, .VIRUS_DELETED => return error.AntivirusInterference,
-            .SHARING_VIOLATION, .DELETE_PENDING => {
-                // transient sharing/deletion races
-                if (attempt >= 13) return error.FileBusy;
-                try std.Io.sleep(io, .fromMilliseconds((@as(u32, 1) << attempt) >> 1), .awake);
-                attempt += 1;
-            },
-            else => return error.Unexpected,
-        }
-    }
-}
-
 fn openReadAuthorityWindows(
     io: std.Io,
     dir: std.Io.Dir,
     sub_path: []const u8,
     allow_namespace_changes: bool,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     if (std.mem.eql(u8, sub_path, ".") or std.mem.eql(u8, sub_path, ".."))
         return error.IsDir;
 
@@ -1242,7 +1151,7 @@ fn createGuardedOutputWindows(
     sub_path: []const u8,
 ) std.Io.File.OpenError!std.Io.File {
     _ = io;
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     if (std.mem.eql(u8, sub_path, ".") or std.mem.eql(u8, sub_path, "..")) return error.IsDir;
 
     const path_space = try std.Io.Threaded.sliceToPrefixedFileW(dir.handle, sub_path, .{});
@@ -1302,7 +1211,7 @@ fn openNamespaceAuthorityWindows(
     share: windows.FILE.SHARE,
     directory_only: bool,
 ) !std.Io.File {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     const path_space = try std.Io.Threaded.sliceToPrefixedFileW(parent.handle, basename, .{});
     const wide = path_space.span();
     if (std.Io.Dir.path.isAbsoluteWindowsWtf16(wide)) return error.BadPathName;
@@ -1360,7 +1269,7 @@ fn createGuardedDirectoryWindows(
     parent: std.Io.Dir,
     basename: []const u8,
 ) !std.Io.Dir {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     const path_space = try std.Io.Threaded.sliceToPrefixedFileW(parent.handle, basename, .{});
     const wide = path_space.span();
     if (std.Io.Dir.path.isAbsoluteWindowsWtf16(wide)) return error.BadPathName;
@@ -1423,7 +1332,7 @@ fn renameGuardedOutputWindows(
     target_parent: std.Io.Dir,
     target_basename: []const u8,
 ) !void {
-    if (builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
 
     const path_space = try std.Io.Threaded.sliceToPrefixedFileW(
         target_parent.handle,
@@ -1549,7 +1458,7 @@ test "open handles compare by physical identity" {
 }
 
 test "Windows hard links compare as one physical file" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1565,7 +1474,7 @@ test "Windows hard links compare as one physical file" {
 }
 
 test "Windows read authority pins the selected Source name until close" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1603,7 +1512,7 @@ test "Windows read authority pins the selected Source name until close" {
 }
 
 test "Windows content authority denies writers but permits pathname replacement" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1660,7 +1569,7 @@ test "Windows content authority denies writers but permits pathname replacement"
 }
 
 test "Windows guarded output pins its name and detects hard-link growth" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1706,7 +1615,7 @@ test "private construction publishes its exact object and removes its workspace"
     try output.writePositionalAll(io, "private payload", 0);
     try output.setLength(io, 15);
     try construction.requireBinding(15);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try std.testing.expectError(error.FileBusy, openReadWrite(io, construction.directory.?, private_construction_file));
     }
     try construction.publish("artifact.bin", 15);
@@ -1749,7 +1658,7 @@ test "private construction failure preserves a raced final and removes only its 
 }
 
 test "POSIX private construction cleanup never deletes a replaced child name" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1786,7 +1695,7 @@ test "construction output pins Windows staging and detects POSIX replacement" {
     try authority.writePositionalAll(io, "selected", 0);
     try authority.setLength(io, 8);
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         tmp.dir.rename("selected.part", tmp.dir, "moved.part", io) catch {};
         try requireConstructionOutputBinding(io, tmp.dir, "selected.part", authority, 8);
         try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, "moved.part", .{}));
@@ -1802,7 +1711,7 @@ test "construction output pins Windows staging and detects POSIX replacement" {
 }
 
 test "Windows guarded output publishes by retained handle and stays owned" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1859,7 +1768,7 @@ test "Windows guarded output publishes by retained handle and stays owned" {
 }
 
 test "Windows exact rollback rename survives post-publication hard-link growth" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1885,7 +1794,7 @@ test "Windows exact rollback rename survives post-publication hard-link growth" 
 }
 
 test "Windows guarded handle rename refuses a raced destination" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1946,7 +1855,7 @@ test "guarded output validation requires write access" {
 }
 
 test "Windows-safe open requests synchronous non-alert I/O" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1964,11 +1873,11 @@ test "Windows-safe open requests synchronous non-alert I/O" {
         .Mode,
     );
     try std.testing.expectEqual(windows.NTSTATUS.SUCCESS, status);
-    try std.testing.expectEqual(@as(u2, 0b10), @intFromEnum(mode.IO));
+    try std.testing.expectEqual(@as(u2, 0b10), @backingInt(mode.IO));
 }
 
 test "Windows-safe open does not follow a final file reparse point" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2072,14 +1981,14 @@ extern "kernel32" fn CreateHardLinkW(
     security_attributes: ?*windows.SECURITY_ATTRIBUTES,
 ) callconv(.winapi) windows.BOOL;
 
-// zig 0.16 Io.Threaded.dirHardLink: unsupported on windows
+// Io.Threaded.dirHardLink is unsupported on windows
 pub fn hardLinkInTmp(
     allocator: std.mem.Allocator,
     tmp: *const std.testing.TmpDir,
     existing: []const u8,
     new: []const u8,
 ) !void {
-    if (comptime builtin.os.tag != .windows) return error.OperationUnsupported;
+    if (comptime builtin.target.os.tag != .windows) return error.OperationUnsupported;
 
     const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
     defer allocator.free(root);

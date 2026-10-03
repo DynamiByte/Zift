@@ -1,5 +1,5 @@
 const std = @import("std");
-const Thread = @import("../core/thread.zig").Thread;
+const Thread = std.Thread;
 const fs = @import("../core/fs.zig");
 const ids = @import("../core/ids.zig");
 const flate = std.compress.flate;
@@ -263,7 +263,7 @@ fn copyExact(
 ) !Extracted {
     var remaining = len;
     var total: u64 = 0;
-    var crc = std.hash.crc.Crc32.init();
+    var crc = std.hash.crc.@"CRC-32/ISO-HDLC".init();
     var buf: [1024 * 1024]u8 = undefined;
     while (remaining > 0) {
         const want: usize = @intCast(@min(remaining, buf.len));
@@ -290,7 +290,7 @@ fn decompressExact(
 ) !Extracted {
     var remaining = len;
     var total: u64 = 0;
-    var crc = std.hash.crc.Crc32.init();
+    var crc = std.hash.crc.@"CRC-32/ISO-HDLC".init();
     var buf: [1024 * 1024]u8 = undefined;
     while (remaining > 0) {
         const want: usize = @intCast(@min(remaining, buf.len));
@@ -696,7 +696,7 @@ fn streamFile(
     const stat = try file.stat(io);
     if (stat.kind != .file) return error.ExpectedFile;
     if (stat.size != expected_size) return error.SizeMismatch;
-    var crc = std.hash.crc.Crc32.init();
+    var crc = std.hash.crc.@"CRC-32/ISO-HDLC".init();
     var md5: ?std.crypto.hash.Md5 = if (needs.md5) std.crypto.hash.Md5.init(.{}) else null;
     var digest_hasher: ?std.crypto.hash.Blake3 = if (needs.digest) std.crypto.hash.Blake3.init(.{}) else null;
     var total: u64 = 0;
@@ -735,7 +735,7 @@ fn streamFile(
 }
 
 fn streamBytes(bytes: []const u8, out: *std.Io.Writer, progress: ?*ui.Progress, needs: HashNeeds) !StreamHashes {
-    var crc = std.hash.crc.Crc32.init();
+    var crc = std.hash.crc.@"CRC-32/ISO-HDLC".init();
     crc.update(bytes);
     try out.writeAll(bytes);
     if (progress) |p| try p.addBytes(bytes.len);
@@ -984,8 +984,8 @@ test "BLAKE3 publication guard preserves ZIP bytes for every source kind" {
     };
 
     for ([_]Compression{ .store, .deflate }, 0..) |compression, index| {
-        const plain_name = try std.fmt.allocPrint(allocator, "plain-{d}.zip", .{index});
-        const guarded_name = try std.fmt.allocPrint(allocator, "guarded-{d}.zip", .{index});
+        const plain_name = try allocator.print("plain-{d}.zip", .{index});
+        const guarded_name = try allocator.print("guarded-{d}.zip", .{index});
         const plain_path = try std.fs.path.join(allocator, &.{ root, plain_name });
         const guarded_path = try std.fs.path.join(allocator, &.{ root, guarded_name });
         try TestBuilder.build(allocator, io, root, plain_path, spool_path, compression, false);
@@ -1141,7 +1141,7 @@ test "ZIP metadata and payload stay on retained content after pathname replaceme
     const parsed = try readCentral(allocator, &reader);
     try std.testing.expectEqual(@as(usize, 1), parsed.entries.len);
 
-    if (@import("builtin").os.tag == .windows) {
+    if (@import("builtin").target.os.tag == .windows) {
         var namespace_mover = try fs.openMutationAuthorityBeneathWindows(
             io,
             tmp.dir,
@@ -1165,7 +1165,7 @@ test "ZIP metadata and payload stay on retained content after pathname replaceme
 }
 
 test "Windows ZIP root file refuses a nested escaping junction" {
-    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1287,13 +1287,13 @@ test "guarded ZIP extraction preserves caller ownership and rejects unsafe outpu
     const payloads = [_][]const u8{ "guarded ZIP bytes", "" };
 
     for ([_]Compression{ .store, .deflate }, 0..) |compression, archive_index| {
-        const archive_name = try std.fmt.allocPrint(allocator, "guarded-{d}.zip", .{archive_index});
+        const archive_name = try allocator.print("guarded-{d}.zip", .{archive_index});
         const archive_path = try std.fs.path.join(allocator, &.{ root, archive_name });
         {
             var builder = try Builder.init(allocator, io, root, archive_path, compression);
             defer builder.deinit();
             for (payloads, 0..) |payload, index| {
-                const path = try std.fmt.allocPrint(allocator, "entry-{d}", .{index});
+                const path = try allocator.print("entry-{d}", .{index});
                 try builder.add(.{ .path = path, .size = payload.len, .data = .{ .bytes = payload } }, null);
             }
             try builder.finish();
@@ -1306,8 +1306,7 @@ test "guarded ZIP extraction preserves caller ownership and rejects unsafe outpu
         const parsed = try readCentral(allocator, &reader);
 
         for (parsed.entries, payloads, 0..) |entry, payload, entry_index| {
-            const output_name = try std.fmt.allocPrint(
-                allocator,
+            const output_name = try allocator.print(
                 "guarded-{d}-{d}.out",
                 .{ archive_index, entry_index },
             );
@@ -1331,7 +1330,7 @@ test "guarded ZIP extraction preserves caller ownership and rejects unsafe outpu
             try std.testing.expectEqualSlices(u8, payload, actual);
         }
 
-        const sentinel_name = try std.fmt.allocPrint(allocator, "sentinel-{d}", .{archive_index});
+        const sentinel_name = try allocator.print("sentinel-{d}", .{archive_index});
         try tmp.dir.writeFile(io, .{ .sub_path = sentinel_name, .data = "sentinel" });
         var nonempty = try fs.openReadWrite(io, tmp.dir, sentinel_name);
         defer nonempty.close(io);
@@ -1342,7 +1341,7 @@ test "guarded ZIP extraction preserves caller ownership and rejects unsafe outpu
         const sentinel = try tmp.dir.readFileAlloc(io, sentinel_name, allocator, .limited(16));
         try std.testing.expectEqualStrings("sentinel", sentinel);
 
-        const read_only_name = try std.fmt.allocPrint(allocator, "read-only-{d}", .{archive_index});
+        const read_only_name = try allocator.print("read-only-{d}", .{archive_index});
         try tmp.dir.writeFile(io, .{ .sub_path = read_only_name, .data = "" });
         var read_only = try fs.openRead(io, tmp.dir, read_only_name);
         defer read_only.close(io);

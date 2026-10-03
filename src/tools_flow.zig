@@ -99,9 +99,9 @@ const Events = struct {
         try self.out.print("EVENT {d} {s}\n", .{ index, name });
         try self.out.flush();
         if (self.pause == index) {
-            if (builtin.os.tag == .linux) {
+            if (builtin.target.os.tag == .linux) {
                 _ = raise(19);
-            } else if (builtin.os.tag == .windows) {
+            } else if (builtin.target.os.tag == .windows) {
                 // windows: no SIGSTOP; barrier then TerminateProcess
                 // no error unwind/flush for crash-recovery test
                 self.out.print("PAUSED {d}\n", .{index}) catch {};

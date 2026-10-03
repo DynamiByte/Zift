@@ -615,15 +615,17 @@ test "matcher preserves an injected read error" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = "source bytes" ** 256 });
-    try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = "source bytes" ** 256 });
+    const pattern = "source bytes";
+    const bytes = std.mem.asBytes(&@as([256][pattern.len]u8, @splat(pattern.*)));
+    try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = bytes });
     const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
     defer allocator.free(root);
     const source_path = try std.fs.path.join(allocator, &.{ root, "source.bin" });
     defer allocator.free(source_path);
     const target_path = try std.fs.path.join(allocator, &.{ root, "target.bin" });
     defer allocator.free(target_path);
-    const size = ("source bytes" ** 256).len;
+    const size = bytes.len;
     try std.testing.expectError(error.InjectedMatcherReadFailure, matchExact(
         allocator,
         io,
@@ -651,8 +653,10 @@ test "short callback read is fatal" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = "abcdefgh" ** 1024 });
-    try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = "abcdefgh" ** 1024 });
+    const pattern = "abcdefgh";
+    const bytes = std.mem.asBytes(&@as([1024][pattern.len]u8, @splat(pattern.*)));
+    try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = bytes });
     const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
     defer allocator.free(root);
     const source_path = try std.fs.path.join(allocator, &.{ root, "source.bin" });
@@ -660,7 +664,7 @@ test "short callback read is fatal" {
     const target_path = try std.fs.path.join(allocator, &.{ root, "target.bin" });
     defer allocator.free(target_path);
     var fault: Fault = .{};
-    const size = ("abcdefgh" ** 1024).len;
+    const size = bytes.len;
     try std.testing.expectError(error.ShortRead, matchExact(
         allocator,
         io,
@@ -715,13 +719,15 @@ test "successful wrong matcher read cannot authorize a COPY cover" {
 }
 
 test "matcher never follows a final Source or Target reparse point" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = "no-follow" ** 1024 });
-    try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = "no-follow" ** 1024 });
+    const pattern = "no-follow";
+    const bytes = std.mem.asBytes(&@as([1024][pattern.len]u8, @splat(pattern.*)));
+    try tmp.dir.writeFile(io, .{ .sub_path = "source.bin", .data = bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "target.bin", .data = bytes });
     tmp.dir.symLink(io, "target.bin", "target-link.bin", .{}) catch |err| switch (err) {
         error.AccessDenied, error.PermissionDenied => return error.SkipZigTest,
         else => |e| return e,
@@ -732,7 +738,7 @@ test "matcher never follows a final Source or Target reparse point" {
     defer allocator.free(source_path);
     const target_link = try std.fs.path.join(allocator, &.{ root, "target-link.bin" });
     defer allocator.free(target_link);
-    const size = ("no-follow" ** 1024).len;
+    const size = bytes.len;
     const covers = matchExact(
         allocator,
         io,

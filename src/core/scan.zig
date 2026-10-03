@@ -1,7 +1,7 @@
 // digest and vendor hashes in one read pass
 
 const std = @import("std");
-const Thread = @import("thread.zig").Thread;
+const Thread = std.Thread;
 const dirscan = @import("dirscan.zig");
 const fs = @import("fs.zig");
 const ids = @import("ids.zig");
@@ -254,6 +254,19 @@ pub fn observationsEqual(lhs: Entry, rhs: Entry) bool {
 fn vendorEqual(lhs: ?ids.VendorHash, rhs: ?ids.VendorHash) bool {
     if (lhs == null or rhs == null) return lhs == null and rhs == null;
     return lhs.?.sameClaim(rhs.?);
+}
+
+test "join retains worker storage until the worker finishes" {
+    var finished = std.atomic.Value(bool).init(false);
+    const Worker = struct {
+        fn run(value: *std.atomic.Value(bool)) void {
+            for (0..10000) |_| std.atomic.spinLoopHint();
+            value.store(true, .release);
+        }
+    };
+    const thread = try Thread.spawn(.{}, Worker.run, .{&finished});
+    thread.join();
+    try std.testing.expect(finished.load(.acquire));
 }
 
 test "scan is deterministic across worker schedules" {

@@ -419,7 +419,8 @@ const CountFaultReader = struct {
 test "stored cursor is exact at a nonzero offset and accepts chunked reads" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
-    const body = "stored W26 body with integers and literal bytes" ** 7000;
+    const body_pattern = "stored W26 body with integers and literal bytes";
+    const body = std.mem.asBytes(&@as([7000][body_pattern.len]u8, @splat(body_pattern.*)));
     const prefix = "container-prefix";
     const storage = try makeContainer(allocator, prefix, body, "outside-range");
     defer allocator.free(storage);
@@ -637,7 +638,8 @@ fn expectZstdFailureAfterConsumption(clip: *Decoder, wanted: []u8, expected: any
 test "zstd finish rejects short trailing concatenated and wrong declared extents" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
-    const plain = "one bounded zstd frame" ** 1000;
+    const plain_pattern = "one bounded zstd frame";
+    const plain = std.mem.asBytes(&@as([1000][plain_pattern.len]u8, @splat(plain_pattern.*)));
     const frame = try @import("frame.zig").compressAlloc(allocator, plain, 5);
     defer allocator.free(frame);
     const second = try @import("frame.zig").compressAlloc(allocator, "second frame", 5);

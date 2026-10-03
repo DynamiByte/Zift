@@ -144,7 +144,7 @@ fn discardWorkspaceGuard(io: std.Io, guard: std.Io.File) void {
 }
 
 fn discardWorkspaceGuardRequired(io: std.Io, guard: std.Io.File) !void {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try fs.discardOpenObjectWindows(io, guard);
     } else {
         // posix: no exact unlink-by-handle; private-path cleanup after close
@@ -994,7 +994,7 @@ fn applyStandardZip(
     const package = packageStateZip(allocator, reader, archive, detected) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const target_paths = standardTargetPaths(allocator, archive.entries, controls) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const expected_entries: []const manifest_mod.File = if (package) |value| value.state.expected.entries else &.{};
-    const path_layout = standardDestinationLayout(allocator, target_paths, controls.removals, expected_entries, builtin.os.tag == .windows) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    const path_layout = standardDestinationLayout(allocator, target_paths, controls.removals, expected_entries, builtin.target.os.tag == .windows) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     controls.removals = path_layout.effective_removals;
     validateDestinationPaths(io, directory_path, path_layout.representability_paths, out) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     validateRemovalPaths(io, directory_path, controls.removals, out) catch |err| return reportApplyError(out, delta_path, directory_path, err);
@@ -1275,8 +1275,7 @@ fn privateStagePath(
     const slash = std.mem.indexOfScalar(u8, base, '/') orelse
         return error.InvalidDeltaLayout;
     if (slash == 0 or slash + 1 == base.len) return error.InvalidDeltaLayout;
-    return std.fmt.allocPrint(
-        allocator,
+    return allocator.print(
         "{s}/attempts/{s}-{d}/{s}",
         .{ base[0..slash], lane, attempt, base[slash + 1 ..] },
     );
@@ -1582,7 +1581,7 @@ fn stageZipEntry(allocator: std.mem.Allocator, io: std.Io, reader: *std.Io.File.
     if (patch_target) |target| {
         const source_plan = try hdiffSourcePlanFor(source_plans, target);
         const source_binding = try source_plan.source();
-        const diff_rel = try std.fmt.allocPrint(scratch, "{s}/diffs/{s}.hdiff", .{ work_root, target });
+        const diff_rel = try scratch.print("{s}/diffs/{s}.hdiff", .{ work_root, target });
         defer scratch.free(diff_rel);
         const staged_diff = try stageGuardedZipMember(
             allocator,
@@ -1610,7 +1609,7 @@ fn stageZipEntry(allocator: std.mem.Allocator, io: std.Io, reader: *std.Io.File.
             counters,
         );
         try validateGuardedHdiffPlan(source_plan, info);
-        const work_rel = try std.fmt.allocPrint(allocator, "{s}/staged/{s}", .{ work_root, target });
+        const work_rel = try allocator.print("{s}/staged/{s}", .{ work_root, target });
         const staged = try stageGuardedHdiff(
             allocator,
             io,
@@ -1639,7 +1638,7 @@ fn stageZipEntry(allocator: std.mem.Allocator, io: std.Io, reader: *std.Io.File.
         diff_guard = null;
         try discardWorkspaceGuardRequired(io, consumed_diff);
     } else {
-        const work_rel = try std.fmt.allocPrint(allocator, "{s}/staged/{s}", .{ work_root, entry.path });
+        const work_rel = try allocator.print("{s}/staged/{s}", .{ work_root, entry.path });
         const staged = try stageGuardedZipMember(
             allocator,
             io,
@@ -1688,7 +1687,7 @@ fn applyStandardTar(
 
     const target_paths = standardTargetPaths(allocator, scan.entries, scan.controls) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const expected_entries: []const manifest_mod.File = if (scan.package) |value| value.state.expected.entries else &.{};
-    const path_layout = standardDestinationLayout(allocator, target_paths, scan.controls.removals, expected_entries, builtin.os.tag == .windows) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    const path_layout = standardDestinationLayout(allocator, target_paths, scan.controls.removals, expected_entries, builtin.target.os.tag == .windows) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     scan.controls.removals = path_layout.effective_removals;
     validateDestinationPaths(io, directory_path, path_layout.representability_paths, out) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     validateRemovalPaths(io, directory_path, scan.controls.removals, out) catch |err| return reportApplyError(out, delta_path, directory_path, err);
@@ -1814,7 +1813,7 @@ fn stageTarEntry(allocator: std.mem.Allocator, io: std.Io, archive_file: std.Io.
     if (patch_target) |target| {
         const source_plan = try hdiffSourcePlanFor(source_plans, target);
         const source_binding = try source_plan.source();
-        const diff_rel = try std.fmt.allocPrint(scratch, "{s}/diffs/{s}.hdiff", .{ work_root, target });
+        const diff_rel = try scratch.print("{s}/diffs/{s}.hdiff", .{ work_root, target });
         defer scratch.free(diff_rel);
         const staged_diff = try stageGuardedTarMember(
             allocator,
@@ -1847,7 +1846,7 @@ fn stageTarEntry(allocator: std.mem.Allocator, io: std.Io, archive_file: std.Io.
         );
         try validateGuardedHdiffPlan(source_plan, info);
 
-        const work_rel = try std.fmt.allocPrint(allocator, "{s}/staged/{s}", .{ work_root, target });
+        const work_rel = try allocator.print("{s}/staged/{s}", .{ work_root, target });
         const staged = try stageGuardedHdiff(
             allocator,
             io,
@@ -1876,7 +1875,7 @@ fn stageTarEntry(allocator: std.mem.Allocator, io: std.Io, archive_file: std.Io.
         diff_guard = null;
         try discardWorkspaceGuardRequired(io, consumed_diff);
     } else {
-        const work_rel = try std.fmt.allocPrint(allocator, "{s}/staged/{s}", .{ work_root, path });
+        const work_rel = try allocator.print("{s}/staged/{s}", .{ work_root, path });
         const staged = try stageGuardedTarMember(
             allocator,
             io,
@@ -1999,7 +1998,7 @@ fn validateStandardStage(io: std.Io, directory_path: []const u8, directory: *std
     const target_paths = try stage.paths(scratch);
     defer scratch.free(target_paths);
     const expected_entries: []const manifest_mod.File = if (expected) |state| state.expected.entries else &.{};
-    const layout = try standardDestinationLayout(scratch, target_paths, stage.removals, expected_entries, builtin.os.tag == .windows);
+    const layout = try standardDestinationLayout(scratch, target_paths, stage.removals, expected_entries, builtin.target.os.tag == .windows);
     defer scratch.free(layout.representability_paths);
     defer scratch.free(layout.effective_removals);
     if (layout.effective_removals.len != stage.removals.len) return error.InvalidDeltaLayout;
@@ -2274,7 +2273,7 @@ fn cleanupArchiveWorkspace(
     workspace: *transaction.Workspace,
 ) void {
     workspace.cleanup();
-    if (builtin.os.tag != .windows)
+    if (builtin.target.os.tag != .windows)
         transaction.cleanupWorkAt(io, directory, workspace.name);
     workspace.deinit();
 }
@@ -2524,7 +2523,7 @@ test "standard archive apply retains ZIP and tar content across confirmation pat
         }
 
         fn replacePath(self: *@This()) !void {
-            if (builtin.os.tag == .windows) {
+            if (builtin.target.os.tag == .windows) {
                 var namespace_mover = try fs.openMutationAuthorityBeneathWindows(
                     self.io,
                     self.dir,
@@ -2584,10 +2583,10 @@ test "standard archive apply retains ZIP and tar content across confirmation pat
     }
     for ([_]Format{ .zip, .tar_zstd }, 0..) |format, index| {
         const extension = if (format == .zip) "zip" else "tar.zst";
-        const active_name = try std.fmt.allocPrint(allocator, "active-{d}.{s}", .{ index, extension });
-        const held_name = try std.fmt.allocPrint(allocator, "held-{d}.{s}", .{ index, extension });
-        const replacement_name = try std.fmt.allocPrint(allocator, "replacement-{d}.{s}", .{ index, extension });
-        const target_name = try std.fmt.allocPrint(allocator, "target-{d}.bin", .{index});
+        const active_name = try allocator.print("active-{d}.{s}", .{ index, extension });
+        const held_name = try allocator.print("held-{d}.{s}", .{ index, extension });
+        const replacement_name = try allocator.print("replacement-{d}.{s}", .{ index, extension });
+        const target_name = try allocator.print("target-{d}.bin", .{index});
         const active_path = try std.fs.path.join(allocator, &.{ root, active_name });
         const replacement_path = try std.fs.path.join(allocator, &.{ root, replacement_name });
         const original_payload = "ORIGINAL";
@@ -2726,7 +2725,7 @@ test "standard archive integrity failures authorize exactly one disposable retry
 }
 
 test "archive guarded ZIP failure records one hard retry and cleans both attempts" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2752,7 +2751,7 @@ test "archive guarded ZIP failure records one hard retry and cleans both attempt
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
     const root_name = try allocator.dupe(u8, workspace.name);
-    const work_rel = try std.fmt.allocPrint(allocator, "{s}/staged/payload.bin", .{workspace.name});
+    const work_rel = try allocator.print("{s}/staged/payload.bin", .{workspace.name});
     var counters: integrity_run.Counters = .{};
     try std.testing.expectError(
         error.Md5Mismatch,
@@ -2798,7 +2797,7 @@ test "archive physical rereads report confirmed size and hash mismatches" {
 }
 
 test "archive Stage cleanup preserves an unknown private sentinel" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -2807,9 +2806,9 @@ test "archive Stage cleanup preserves an unknown private sentinel" {
     var workspace = try transaction.Workspace.create(allocator, io, tmp.dir, &.{});
     defer workspace.deinit();
     try workspace.ensureDirectory("staged");
-    const owned_path = try std.fmt.allocPrint(allocator, "{s}/staged/owned.bin", .{workspace.name});
+    const owned_path = try allocator.print("{s}/staged/owned.bin", .{workspace.name});
     defer allocator.free(owned_path);
-    const sentinel_path = try std.fmt.allocPrint(allocator, "{s}/staged/sentinel.bin", .{workspace.name});
+    const sentinel_path = try allocator.print("{s}/staged/sentinel.bin", .{workspace.name});
     defer allocator.free(sentinel_path);
     const guarded = try fs.createGuardedOutputBeneath(io, tmp.dir, owned_path);
     try guarded.writePositionalAll(io, "owned", 0);
@@ -3048,7 +3047,7 @@ test "archive stage verification remains bound to retained target guards" {
     try std.testing.expectEqual(@as(usize, 1), try guarded.readPositionalAll(io, &observed, 0));
     try std.testing.expectEqualStrings("1", &observed);
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         try tmp.dir.rename("work/staged/core.bin", tmp.dir, "work/staged/moved.bin", io);
         try tmp.dir.writeFile(io, .{ .sub_path = "work/staged/core.bin", .data = "sentinel" });
         try std.testing.expectError(
@@ -3061,7 +3060,7 @@ test "archive stage verification remains bound to retained target guards" {
 
     stage.discardGuards(io);
     stage.discardGuards(io);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, "work/staged/core.bin", .{ .follow_symlinks = false }));
     } else {
         try tmp.dir.deleteFile(io, "work/staged/moved.bin");
@@ -3272,7 +3271,7 @@ test "HDiff archives skip a missing source while publishing independent files an
         var tmp = std.testing.tmpDir(.{});
         defer tmp.cleanup();
         const root = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path });
-        const package_path = try std.fmt.allocPrint(a, "{s}/delta{s}", .{ root, format.extension() });
+        const package_path = try a.print("{s}/delta{s}", .{ root, format.extension() });
         try tmp.dir.writeFile(io, .{ .sub_path = "old", .data = "old bytes" });
         {
             var builder = try @import("../archive/writer.zig").Builder.init(a, io, root, package_path, format, .{});

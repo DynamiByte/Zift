@@ -144,7 +144,7 @@ const Rle = struct {
             const encoded_length = try core.readUIntTagged(self.control, 2, &tag);
             const length = std.math.add(u64, encoded_length, 1) catch
                 return core.Error.IntegerOverflow;
-            switch (@as(RleType, @enumFromInt(@as(u2, @truncate(tag))))) {
+            switch (@as(RleType, @fromBackingInt(@as(u2, @truncate(tag))))) {
                 .zero => {
                     self.set_remaining = length;
                     self.set_value = 0;
@@ -814,7 +814,7 @@ test "HDIFF13 refuses Source and container Target aliases before truncation" {
 }
 
 test "HDIFF13 refuses a hard-linked Source Target before truncation" {
-    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag != .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     const patch = try buildFixture(allocator, .{});

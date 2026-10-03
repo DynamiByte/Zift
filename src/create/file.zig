@@ -1,6 +1,6 @@
 const manifest_mod = @import("../core/manifest.zig");
 const std = @import("std");
-const Thread = @import("../core/thread.zig").Thread;
+const Thread = std.Thread;
 
 const archive = @import("../archive.zig");
 const zip = @import("../archive/zip.zig");

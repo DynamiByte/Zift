@@ -60,7 +60,7 @@ pub fn enumerate(
     });
     defer root_dir.close(io);
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const query_buffer = try gpa.alloc(u8, 64 * 1024);
         defer gpa.free(query_buffer);
         try enumerateWindows(allocator, gpa, io, root_dir, ignore_path, &entries, query_buffer);
@@ -87,7 +87,7 @@ fn enumeratePortable(
 ) !void {
     var walker = try root_dir.walkSelectively(scratch);
     defer {
-        // zig 0.16: SelectiveWalker.deinit leaves child handles open
+        // SelectiveWalker.deinit leaves child handles open
         while (walker.stack.items.len > 1) walker.leave(io);
         walker.deinit();
     }
@@ -185,7 +185,7 @@ fn enumerateWindowsDirectory(
             &io_status_block,
             query_buffer.ptr,
             @intCast(query_buffer.len),
-            @enumFromInt(FileDirectoryInformation),
+            @fromBackingInt(FileDirectoryInformation),
             .FALSE,
             null,
             if (restart_scan) .TRUE else .FALSE,
@@ -226,7 +226,7 @@ fn enumerateWindowsDirectory(
                 const relative = if (prefix.len == 0)
                     try path_allocator.dupe(u8, name)
                 else
-                    try std.fmt.allocPrint(path_allocator, "{s}/{s}", .{ prefix, name });
+                    try path_allocator.print("{s}/{s}", .{ prefix, name });
                 errdefer path_allocator.free(relative);
 
                 const ignored = shouldIgnore(ignore_path, relative);
@@ -322,7 +322,7 @@ test "enumeration prunes ignored directories before descent" {
 }
 
 test "nested enumeration closes directories through allocation failures" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const Exercise = struct {
         fn descriptorCount(io: std.Io) !usize {
             var directory = try std.Io.Dir.cwd().openDir(io, "/proc/self/fd", .{ .iterate = true });

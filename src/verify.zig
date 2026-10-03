@@ -191,7 +191,7 @@ pub fn parseMd5(text: []const u8) ![16]u8 {
 }
 
 test "hash does not follow final symlink" {
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag == .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -212,7 +212,7 @@ test "size problems treat a file ancestor as a missing target path" {
     var sink: std.Io.Writer.Discarding = .init(&.{});
     var progress: ui.Progress = .{ .io = io, .writer = &sink.writer, .label = "Checking", .total_files = 1 };
     try progress.start();
-    const failures = try sizeProblems(allocator, io, root, &.{.{ .path = "a/b", .size = 1, .md5 = [_]u8{0} ** 16 }}, &progress);
+    const failures = try sizeProblems(allocator, io, root, &.{.{ .path = "a/b", .size = 1, .md5 = @splat(0) }}, &progress);
     try progress.finish();
     try std.testing.expectEqual(@as(usize, 1), failures.len);
     try std.testing.expectEqual(FailureReason.missing, failures[0].reason);
@@ -230,7 +230,7 @@ test "hash problems treat a file ancestor as a missing target path" {
     var sink: std.Io.Writer.Discarding = .init(&.{});
     var progress: ui.Progress = .{ .io = io, .writer = &sink.writer, .label = "Verifying", .total_files = 1 };
     try progress.start();
-    const failures = try hashProblems(allocator, io, root, &.{.{ .path = "a/b", .size = 1, .md5 = [_]u8{0} ** 16 }}, &progress);
+    const failures = try hashProblems(allocator, io, root, &.{.{ .path = "a/b", .size = 1, .md5 = @splat(0) }}, &progress);
     try progress.finish();
     try std.testing.expectEqual(@as(usize, 1), failures.len);
     try std.testing.expectEqual(FailureReason.missing, failures[0].reason);

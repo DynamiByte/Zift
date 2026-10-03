@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: zig-0.16-alpine
+    runs-on: zig-0.17-alpine
     timeout-minutes: 30
 
     steps:
@@ -162,7 +162,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "$(zig version)" = "0.16.0"
+          test "$(zig version)" = "0.17.0"
 
           rm -rf release zig-out
 
@@ -172,7 +172,7 @@ jobs:
 
           zig build \
             -Dtarget=x86_64-linux-musl \
-            -Doptimize=ReleaseSmall
+            -Doptimize=small
 
           test -f zig-out/bin/zift
 
@@ -188,7 +188,7 @@ jobs:
 
           zig build \
             -Dtarget=x86_64-windows-gnu \
-            -Doptimize=ReleaseSmall
+            -Doptimize=small
 
           test -f zig-out/bin/zift.exe
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Thread = @import("core/thread.zig").Thread;
+const Thread = std.Thread;
 
 const ui = @import("ui.zig");
 const interrupt = @import("interrupt.zig");

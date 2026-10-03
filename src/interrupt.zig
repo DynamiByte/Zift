@@ -5,9 +5,9 @@ var requested_flag: std.atomic.Value(bool) = .init(false);
 
 pub fn install() !void {
     requested_flag.store(false, .release);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         if (SetConsoleCtrlHandler(windowsHandler, .TRUE) == .FALSE) return error.InterruptHandlerInstallFailed;
-    } else if (builtin.os.tag != .wasi and builtin.os.tag != .freestanding) {
+    } else if (builtin.target.os.tag != .wasi and builtin.target.os.tag != .freestanding) {
         const action: std.posix.Sigaction = .{
             .handler = .{ .handler = posixHandler },
             .mask = std.posix.sigemptyset(),
