@@ -1,9 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Method = @import("delta.zig").Method;
 const ArchiveFormat = @import("archive.zig").Format;
 const HDiffFormat = @import("hdiff.zig").Format;
 const ui = @import("ui.zig");
+const interrupt = @import("interrupt.zig");
 const zstd_c = @import("compression/zstd_c.zig");
 
 pub const MethodChoice = union(Method) {
@@ -552,10 +554,7 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io) !?[]const u8 {
     var one: [1]u8 = undefined;
     var reader = stdin_file.readerStreaming(io, &one);
     while (true) {
-        const ch = reader.interface.takeByte() catch |err| switch (err) {
-            error.ReadFailed => return reader.err.?,
-            error.EndOfStream => if (len == 0 and !too_long) return null else break,
-        };
+        const ch = (try readPromptByte(&reader)) orelse if (len == 0 and !too_long) return null else break;
         if (ch == '\n') break;
         if (too_long) continue;
         if (len == input.len) {
@@ -568,6 +567,39 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io) !?[]const u8 {
     if (too_long) return error.InputTooLong;
     const line = try allocator.dupe(u8, std.mem.trim(u8, input[0..len], " \t\r"));
     return line;
+}
+
+fn readPromptByte(reader: *std.Io.File.Reader) !?u8 {
+    try interrupt.check();
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi or builtin.os.tag == .freestanding) {
+        const ch = reader.interface.takeByte() catch |err| {
+            try interrupt.check();
+            return switch (err) {
+                error.ReadFailed => reader.err.?,
+                error.EndOfStream => null,
+            };
+        };
+        try interrupt.check();
+        return ch;
+    }
+
+    var byte: [1]u8 = undefined;
+    while (true) {
+        const rc = std.posix.system.read(reader.file.handle, &byte, 1);
+        try interrupt.check();
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => return if (rc == 0) null else byte[0],
+            .INTR => continue,
+            .AGAIN => return error.WouldBlock,
+            .CANCELED => return error.Canceled,
+            .IO => return error.InputOutput,
+            .ISDIR => return error.IsDir,
+            .NOBUFS, .NOMEM => return error.SystemResources,
+            .NOTCONN => return error.SocketUnconnected,
+            .CONNRESET => return error.ConnectionResetByPeer,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
 }
 
 pub fn printProblem(w: *std.Io.Writer, problem: Problem) !void {
