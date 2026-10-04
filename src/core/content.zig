@@ -1,5 +1,6 @@
 // incremental prefix hashing
 const std = @import("std");
+const interrupt = @import("../interrupt.zig");
 const ids = @import("ids.zig");
 const scan = @import("scan.zig");
 
@@ -64,6 +65,7 @@ pub const State = struct {
         if (buffer.len == 0) return error.InvalidBufferSize;
         if (try file.length(io) != self.size) return error.TargetSizeChanged;
         while (self.seen < self.size) {
+            try interrupt.check();
             const offset = self.seen;
             const want: usize = @intCast(@min(@as(u64, buffer.len), self.size - offset));
             const got = try reader.read(io, file, buffer[0..want], offset);

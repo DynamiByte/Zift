@@ -13,6 +13,7 @@ const plan_mod = @import("inplace_plan.zig");
 const buffers = @import("stream_buffers.zig");
 const profile = @import("../profile.zig");
 const ui_mod = @import("../ui.zig");
+const interrupt = @import("../interrupt.zig");
 const generic = @import("../plan/generic.zig");
 const tree = @import("../tree.zig");
 const ziff_create = @import("../create/ziff.zig");
@@ -129,6 +130,7 @@ fn decodeState(bytes: []const u8) !State {
     return result;
 }
 fn exact(io: std.Io, file: std.Io.File, bytes: []u8, offset: u64) !void {
+    try interrupt.check();
     if (try fs.readAllAt(io, file, bytes, offset) != bytes.len) return error.ShortInplaceRead;
 }
 fn sourceName(buffer: []u8, index: usize, backup: bool) ![]const u8 {
@@ -237,6 +239,7 @@ const Context = struct {
         if (c.options.issue) |report| report(c.options.issue_context, .{ .path = path, .action = action, .err = err });
     }
     fn event(c: *Context, name: []const u8) !void {
+        try interrupt.check();
         c.stats.events += 1;
         if (c.options.event) |f| try f(c.options.event_context, name, c.stats.events);
     }
@@ -315,6 +318,7 @@ const Context = struct {
         defer span.end(c.io);
         if (c.options.progress) |progress| progress.totals(0, c.plan.files.len);
         for (c.plan.files, 0..) |file, index| {
+            try interrupt.check();
             defer if (c.options.progress) |progress| progress.complete(0, 1);
             c.checkFile(index) catch |err| {
                 try c.issue(index, "Checking source", err);
@@ -963,6 +967,7 @@ const Context = struct {
         defer if (held) |*parent| parent.close(c.io);
         defer if (listing) |*dir| dir.close(c.io);
         for (c.directory.ops) |op| {
+            try interrupt.check();
             defer if (c.options.progress) |progress| progress.advanceWork(0, 1);
             const expected = c.directory.files[op.target];
             const parent_path = parentPath(expected.path);
@@ -1070,6 +1075,7 @@ fn verifyGroup(shared: *const VerifyShared, group: VerifyGroup, buffer: []u8) vo
     }
 }
 fn verifyTarget(c: *const Context, parent: std.Io.Dir, expected: ziff.FileEntry, buffer: []u8) !u64 {
+    try interrupt.check();
     const hashed = hash: {
         var file = fs.openExisting(c.io, parent, baseName(expected.path), .read_only) catch |err| switch (err) {
             error.FileNotFound, error.IsDir, error.NotDir => return error.FinishedHashMismatch,
@@ -1085,7 +1091,7 @@ fn verifyTarget(c: *const Context, parent: std.Io.Dir, expected: ziff.FileEntry,
 }
 
 fn verifyWorker(shared: *VerifyShared, buffer: []u8) void {
-    while (true) {
+    while (!interrupt.requested()) {
         const index = shared.next.fetchAdd(1, .monotonic);
         if (index >= shared.groups.len) return;
         verifyGroup(shared, shared.groups[index], buffer);
@@ -1128,6 +1134,7 @@ fn runFinalHashes(c: *Context, groups: []const VerifyGroup, targets: []const u32
     for (threads) |thread| thread.join();
     spawned = 0;
 
+    try interrupt.check();
     for (results, targets) |result, target| {
         if (result.err) |err| try c.issue(target, "Verifying", err);
         c.stats.final_hash_bytes = std.math.add(u64, c.stats.final_hash_bytes, result.bytes) catch return error.IntegerOverflow;
@@ -1717,6 +1724,7 @@ const Decoder = struct {
         }
     }
     fn write(d: *Decoder, offset: u64, bytes: []const u8) !void {
+        try interrupt.check();
         const c = d.context;
         const target_size = c.directory.files[d.unit.target].size;
         if (offset != d.written or offset > target_size or bytes.len > target_size - offset) return error.NonsequentialOutput;
@@ -1807,6 +1815,7 @@ const Decoder = struct {
         var consumed: u64 = 0;
         var overflow: [1]u8 = undefined;
         while (true) {
+            try interrupt.check();
             if (input.pos == input.size and consumed < d.unit.payload_len) {
                 const n: usize = @intCast(@min(@as(u64, c.buffer.len), d.unit.payload_len - consumed));
                 try exact(c.io, c.package, c.buffer[0..n], d.unit.payload_offset + consumed);
@@ -1832,6 +1841,7 @@ const Decoder = struct {
 };
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, package: std.Io.File, opened: *const ziff_file.Opened, root: std.Io.Dir, options: Options) !Stats {
+    try interrupt.check();
     if (options.checkpoint_units == 0 or options.buffer_bytes == 0 or options.buffer_bytes > 64 * 1024 * 1024) return error.InvalidInplaceOptions;
     if (options.write_buffer_bytes > 4 * 1024 * 1024 or options.patch_buffer_bytes > 4 * 1024 * 1024)
         return error.InvalidInplaceOptions;
@@ -1968,6 +1978,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, package: std.Io.File, opene
     }
     const first: usize = @intCast(context.state.next);
     for (first..opened.directory.units.len) |index| {
+        try interrupt.check();
         const target_index = opened.directory.units[index].target;
         if (!context.unavailable_files[target_index]) context.prepare(target_index) catch |err| {
             try context.issue(target_index, "Preserving source", err);
@@ -2012,4 +2023,49 @@ test "in-place progress records have bounded fields and checked complete state" 
     try std.testing.expect(!knownArtifact("b123.part", 123));
     try std.testing.expect(!knownArtifact("b0123.part", 124));
     try std.testing.expect(!knownArtifact("m../x", 124));
+}
+
+test "interrupted single-file apply resumes after a partial write" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(io, "install", .default_dir);
+    var root = try tmp.dir.openDir(io, "install", .{ .iterate = true });
+    defer root.close(io);
+    const bytes: [4096]u8 = @splat('x');
+    var files = [_]ziff.FileEntry{.{ .path = "target", .size = bytes.len, .digest = ids.Digest.of(&bytes) }};
+    var package = try fs.createGuardedOutput(io, tmp.dir, "delta.ziff");
+    defer package.close(io);
+    const start = try ziff_file.beginFile(allocator, io, package, .{
+        .source_fingerprint = ziff.logicalFingerprint(&.{}),
+        .target_fingerprint = ziff.logicalFingerprint(&files),
+        .target_bytes = bytes.len,
+        .unit_count = 1,
+    });
+    try package.writePositionalAll(io, &bytes, start);
+    var units = [_]ziff.Unit{.{ .kind = .raw, .target = 0, .payload_offset = start, .payload_len = bytes.len, .source_first = 0, .source_count = 0 }};
+    var ops = [_]ziff.Op{.{ .kind = .full, .target = 0, .arg = 0 }};
+    try ziff_file.finishFile(allocator, io, package, .{ .files = &files, .units = &units, .ops = &ops, .sources = &.{}, .removed = &.{} });
+    var opened = try ziff_file.openFile(allocator, io, package);
+    defer opened.deinit();
+    const Cancel = struct {
+        fn event(_: ?*anyopaque, name: []const u8, _: u64) !void {
+            if (std.mem.eql(u8, name, "after-output-write")) interrupt.request();
+        }
+    };
+    defer interrupt.reset();
+    try std.testing.expectError(error.Interrupted, run(allocator, io, package, &opened, root, .{
+        .buffer_bytes = 64,
+        .write_buffer_bytes = 0,
+        .event = Cancel.event,
+    }));
+    interrupt.reset();
+    try std.testing.expect((try root.statFile(io, "target", .{})).size < bytes.len);
+    const stats = try run(allocator, io, package, &opened, root, .{ .verify_finished = true });
+    try std.testing.expect(stats.resumed);
+    try std.testing.expectEqual(@as(u64, 0), stats.errors);
+    const actual = try root.readFileAlloc(io, "target", allocator, .unlimited);
+    defer allocator.free(actual);
+    try std.testing.expectEqualSlices(u8, &bytes, actual);
 }

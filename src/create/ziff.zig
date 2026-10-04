@@ -18,6 +18,7 @@ const profile = @import("../profile.zig");
 const ziff = @import("../format/ziff.zig");
 const ziff_file = @import("../format/ziff_file.zig");
 const ui = @import("../ui.zig");
+const interrupt = @import("../interrupt.zig");
 const manifest_mod = @import("../core/manifest.zig");
 
 pub const default_buffer_bytes: usize = 1024 * 1024;
@@ -205,6 +206,7 @@ fn digestOpenInput(
     var hasher = std.crypto.hash.Blake3.init(.{});
     var offset: u64 = 0;
     while (offset < input.size) {
+        try interrupt.check();
         const wanted: usize = @intCast(@min(@as(u64, buffer.len), input.size - offset));
         const count = try reader.read(io, input.file, buffer[0..wanted], offset);
         if (count > wanted) return error.InvalidReadCount;
@@ -375,6 +377,7 @@ fn writeCompressedInput(
         .pos = 0,
     };
     while (input.pos < input.size) {
+        try interrupt.check();
         var compressed: zstd_c.ZstdOutBuffer = .{
             .dst = output_buffer.ptr,
             .size = output_buffer.len,
@@ -400,6 +403,7 @@ fn finishCompressed(
 ) !void {
     var input: zstd_c.ZstdInBuffer = .{ .src = null, .size = 0, .pos = 0 };
     while (true) {
+        try interrupt.check();
         var compressed: zstd_c.ZstdOutBuffer = .{
             .dst = output_buffer.ptr,
             .size = output_buffer.len,
@@ -469,6 +473,7 @@ fn writeFullUnit(
     var target_position: u64 = 0;
     var output_position = output_offset;
     while (target_position < target_size) {
+        try interrupt.check();
         const wanted: usize = @intCast(@min(@as(u64, input_buffer.len), target_size - target_position));
         const count = try options.payload_reader.read(io, target, input_buffer[0..wanted], target_position);
         if (count > wanted) return error.InvalidReadCount;
@@ -521,6 +526,7 @@ const LogicalInput = struct {
     }
 
     fn readExact(self: *LogicalInput, destination: []u8, offset: u64) !void {
+        try interrupt.check();
         if (destination.len == 0) return;
         const end = std.math.add(u64, offset, destination.len) catch return error.ReadOutOfBounds;
         if (end > self.size) return error.ReadOutOfBounds;
@@ -643,6 +649,7 @@ const SourceReader = struct {
     }
 
     fn readExact(self: *SourceReader, destination: []u8, offset: u64) !void {
+        try interrupt.check();
         if (destination.len == 0) return;
         if (offset > self.input.size or destination.len > self.input.size - offset)
             return error.ReadOutOfBounds;
@@ -1212,6 +1219,7 @@ const FilePayloadOutput = struct {
     base: u64,
 
     fn write(raw: ?*anyopaque, offset: u64, bytes: []const u8) !void {
+        try interrupt.check();
         const self: *@This() = @ptrCast(@alignCast(raw.?));
         try self.file.writePositionalAll(self.io, bytes, try checkedAdd(self.base, offset));
     }
@@ -1293,6 +1301,7 @@ const MemoryPayloadOutput = struct {
     bytes: std.ArrayList(u8) = .empty,
 
     fn write(raw: ?*anyopaque, offset: u64, data: []const u8) !void {
+        try interrupt.check();
         const self: *@This() = @ptrCast(@alignCast(raw.?));
         const start = std.math.cast(usize, offset) orelse return error.OutputTooLarge;
         const end = std.math.add(usize, start, data.len) catch return error.OutputTooLarge;
@@ -1753,6 +1762,7 @@ fn serializeSingletonsPipelined(
 
     var producer_error: ?anyerror = null;
     while (prepared < unit_count) {
+        try interrupt.check();
         if (serialize.failed.load(.acquire)) break;
         const family = prepareSingletonFamily(
             allocator,
@@ -1852,6 +1862,7 @@ fn targetMatchesPlan(
         try state.bindVerification(entry.verification);
         var offset: u64 = 0;
         while (offset < entry.size) {
+            try interrupt.check();
             const wanted: usize = @intCast(@min(@as(u64, authentication_buffer.len), entry.size - offset));
             const count = try reader.read(io, part.file, authentication_buffer[0..wanted], offset);
             if (count > wanted) return error.InvalidReadCount;
@@ -1962,6 +1973,7 @@ fn createToFile(
 
     var unit_cursor: usize = 0;
     while (unit_cursor < directory.units.len) : (unit_cursor += 1) {
+        try interrupt.check();
         const unit = &directory.units[unit_cursor];
         unit.payload_offset = cursor;
         if (unit.kind == .patch_zar26) {
@@ -2284,6 +2296,7 @@ pub fn create(
     bindings: Bindings,
     options: Options,
 ) !Stats {
+    try interrupt.check();
     if (options.progress) |progress| {
         var total_bytes: u64 = 0;
         for (directory.units) |unit| total_bytes +|= directory.files[unit.target].size;
@@ -2308,6 +2321,7 @@ pub fn create(
     var checked = try ziff_file.openFile(allocator, io, output);
     checked.deinit();
     try construction.requireBinding(final_size);
+    try interrupt.check();
     try construction.publish(final_name, final_size);
     return stats;
 }
@@ -3077,4 +3091,43 @@ test "serializer worker scratch is not retained with replay recipes" {
         }
     }
     try std.testing.expect(arena.queryCapacity() < default_buffer_bytes);
+}
+
+test "full-unit cancellation stops between chunks" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bytes: [4096]u8 = @splat('x');
+    try tmp.dir.writeFile(io, .{ .sub_path = "target", .data = &bytes });
+    const path = try fixturePath(allocator, &tmp, "target");
+    defer allocator.free(path);
+    var output = try fs.createGuardedOutput(io, tmp.dir, "payload");
+    defer output.close(io);
+    const Reader = struct {
+        calls: usize = 0,
+        fn read(raw: ?*anyopaque, read_io: std.Io, file: std.Io.File, data: []u8, offset: u64) !usize {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            const count = try file.readPositionalAll(read_io, data, offset);
+            interrupt.request();
+            return count;
+        }
+    };
+    defer interrupt.reset();
+    for ([_]ziff.UnitKind{ .raw, .zstd }) |kind| {
+        interrupt.reset();
+        try output.setLength(io, 0);
+        var reader: Reader = .{};
+        try std.testing.expectError(error.Interrupted, writeFullUnit(allocator, io, path, .{
+            .path = "target",
+            .size = bytes.len,
+            .digest = ids.Digest.of(&bytes),
+        }, output, 0, kind, .{
+            .buffer_bytes = 64,
+            .payload_reader = .{ .context = &reader, .read_fn = Reader.read },
+        }));
+        try std.testing.expectEqual(@as(usize, 1), reader.calls);
+        try std.testing.expect(try output.length(io) < bytes.len);
+    }
 }

@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 var requested_flag: std.atomic.Value(bool) = .init(false);
 
 pub fn install() !void {
-    requested_flag.store(false, .release);
+    reset();
     if (builtin.target.os.tag == .windows) {
         if (SetConsoleCtrlHandler(windowsHandler, .TRUE) == .FALSE) return error.InterruptHandlerInstallFailed;
     } else if (builtin.target.os.tag != .wasi and builtin.target.os.tag != .freestanding) {
@@ -19,6 +19,14 @@ pub fn install() !void {
     }
 }
 
+pub fn request() void {
+    requested_flag.store(true, .release);
+}
+
+pub fn reset() void {
+    requested_flag.store(false, .release);
+}
+
 pub fn requested() bool {
     return requested_flag.load(.acquire);
 }
@@ -28,7 +36,7 @@ pub fn check() !void {
 }
 
 fn posixHandler(_: std.posix.SIG) callconv(.c) void {
-    requested_flag.store(true, .release);
+    request();
 }
 
 const WindowsHandler = *const fn (u32) callconv(.winapi) std.os.windows.BOOL;
@@ -36,6 +44,6 @@ extern "kernel32" fn SetConsoleCtrlHandler(handler: ?WindowsHandler, add: std.os
 
 fn windowsHandler(kind: u32) callconv(.winapi) std.os.windows.BOOL {
     if (kind != 0 and kind != 1) return .FALSE;
-    requested_flag.store(true, .release);
+    request();
     return .TRUE;
 }
