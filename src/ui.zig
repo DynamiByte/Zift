@@ -341,6 +341,7 @@ pub const Progress = struct {
             return;
         }
         if (liveProgress(self.writer)) {
+            self.draw(std.Io.Timestamp.now(self.io, .awake).nanoseconds) catch {};
             reset(self.writer) catch {};
             self.writer.writeByte('\n') catch {};
             self.writer.flush() catch {};
@@ -1173,11 +1174,14 @@ test "reading abort leaves unfinished progress above errors" {
     try progress.startReading(2, 8);
     try progress.addBytes(4);
     try progress.finishFile();
-    const last_read = std.mem.lastIndexOf(u8, output.written(), "Reading contents:").?;
+    try progress.addBytes(2);
+    const before_abort = output.written().len;
     progress.abort();
     try std.testing.expect(!progress.started);
     try std.testing.expect(std.mem.endsWith(u8, output.written(), "\n"));
-    try std.testing.expect(std.mem.indexOf(u8, output.written()[last_read..], "100%") == null);
+    const aborted = output.written()[before_abort..];
+    try std.testing.expect(std.mem.indexOf(u8, aborted, "75%  6 B/8 B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aborted, "100%") == null);
 }
 
 test "redirected stages are sequential and empty reading work emits no bar" {
