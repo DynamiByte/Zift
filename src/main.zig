@@ -25,9 +25,9 @@ fn operationError(stdout: *std.Io.Writer, stderr: *std.Io.Writer, err: anyerror)
         try stderr.flush();
         return 1;
     }
+    try stdout.flush();
     try unexpectedError(stderr, err);
     try stderr.flush();
-    try stdout.flush();
     return 1;
 }
 
