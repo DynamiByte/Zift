@@ -216,6 +216,12 @@ pub fn run(
     }
     if (canUseExpectedFastPath(source) and canUseExpectedFastPath(target)) try finishMetadataComparison(allocator, target.metadata(), &comparison);
     try out.writeByte('\n');
+    const plan = comparison.plan;
+    if (plan.changed.len == 0 and plan.added.len == 0 and plan.removed.len == 0) {
+        try ui.writeSuccessLine(out, "No differences found.");
+        if (had_errors) try ui.complete(out, true);
+        return;
+    }
 
     const prefix_default = if (software) |value| integrations.defaultPrefix(value) else null;
     const prefix: ?[]const u8 = if (choices.prefix) |value|
@@ -262,7 +268,6 @@ pub fn run(
 
     var source_tree = comparison.source_tree;
     var target_tree = comparison.target_tree;
-    const plan = comparison.plan;
     if (method != .ziff) {
         if (method == .file_delta) {
             var target_dir = try std.Io.Dir.cwd().openDir(io, target_tree.root, .{ .access_sub_paths = true });
@@ -287,12 +292,6 @@ pub fn run(
     const tmp_path = try allocator.print("{s}.part", .{out_path});
 
     try printCreateSummary(out, software, source_index_version, target_index_version, method, hdiff_format, source.path, target.path, out_path, plan, source_tree, target_tree);
-    if (plan.changed.len == 0 and plan.added.len == 0 and plan.removed.len == 0) {
-        try out.writeByte('\n');
-        try ui.writeSuccessLine(out, "No differences found.");
-        if (had_errors) try ui.complete(out, true);
-        return;
-    }
 
     try requireMissing(io, out_path, out_path, out);
     if (method != .ziff) try requireMissing(io, tmp_path, out_path, out);
@@ -1167,6 +1166,28 @@ test "one unavailable managed view downgrades both sides to literal generic" {
     try std.testing.expectEqual(@as(usize, 0), result.source.metadata().len);
     try std.testing.expectEqual(@as(usize, 0), result.target.metadata().len);
     try std.testing.expect((if (result.software) |value| integrations.ignoreFilter(value) else null) == null);
+}
+
+test "identical generic directories finish without creation prompts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(io, "source", .default_dir);
+    try tmp.dir.createDir(io, "target", .default_dir);
+    for ([_][]const u8{ "source/unchanged", "target/unchanged" }) |path|
+        try tmp.dir.writeFile(io, .{ .sub_path = path, .data = "same contents" });
+    const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    const source = try std.fs.path.join(allocator, &.{ root, "source" });
+    const target = try std.fs.path.join(allocator, &.{ root, "target" });
+    const output_path = try std.fs.path.join(allocator, &.{ root, "unused.ziff" });
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    try run(allocator, io, source, target, output_path, .{}, false, false, false, &output.writer);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "No differences found.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Prefix") == null);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(io, "unused.ziff", .{}));
 }
 
 test "resolved version keeps full overrides" {
