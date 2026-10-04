@@ -23,23 +23,23 @@ Optional integrations: Zenless Zone Zero, Genshin Impact, Arknights: Endfield, a
 
 - `-a` Accept defaults automatically.
 - `-c` Perform a Complete Clean.
-- `-m` Reduce matching memory; creation may take longer.
+- `-m` Reduce matching memory. Creation may take longer.
 - `-y` Skip the final confirmation.
-- `-v` Verify finished file hashes where available; takes more time.
-- `-f` Override Ziff software/version guards and free-space preflight.
+- `-v` Verify finished file hashes. Takes more time.
+- `-f` Apply despite low disk space or a Ziff software/source-version mismatch.
 - `-h`, `--help` Show usage.
 
 Creation choices:
 
 - `--integration y|n` Use or skip the detected integration.
-- `--prefix text|n` Set the output-name prefix; `n` omits it.
+- `--prefix text|n` Set the output-name prefix. Use `n` to omit it.
 - `--source-version text`, `--target-version text` Set the version names.
-- `--method ziff|hdiff[:w26|h13|sf20]|file` Default: Ziff; HDiff variant: W26. Also accepts `1|2|3`.
-- `--format zip-store|zip-deflate[:N]|tar-zstd[:N]` File Delta/HDiff only. Deflate: `1`–`9` (default `1`); Zstd: `1`–`22` (default `3`).
+- `--method ziff|hdiff[:w26|h13|sf20]|file` Default: Ziff. HDiff defaults to W26. Also accepts `1|2|3`.
+- `--format zip-store|zip-deflate[:N]|tar-zstd[:N]` File Delta/HDiff only. Deflate: `1`–`9` (default `1`). Zstd: `1`–`22` (default `3`).
 - `--continue-on-errors y|n` Continue or abort on reported source/target issues.
 - `--correct-target-manifest y|n` Correct reported target entries in the delta.
 
-Explicit choices override `-a`; omitted choices prompt without it. `-a` and `-y` do not approve content issues.
+Explicit choices override `-a`. Without `-a`, omitted choices prompt. `-a` and `-y` do not approve content issues or Ziff compatibility mismatches. `-f` leaves content integrity checks enabled.
 
 Ctrl+C cancels active work. Interrupted Ziff applies resume on the next run.
 

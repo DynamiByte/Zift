@@ -643,10 +643,10 @@ pub fn printUsage(w: *std.Io.Writer) !void {
         \\Options:
         \\  -a  Use detected values and defaults
         \\  -c  Complete Clean
-        \\  -m  Lower matching memory; slower creation
-        \\  -f  Apply despite low disk space
+        \\  -m  Reduce matching memory. Creation may take longer.
+        \\  -f  Apply despite low space or a Ziff software/source-version mismatch
         \\  -y  Skip final confirmation
-        \\  -v  Verify available content hashes
+        \\  -v  Verify finished file hashes. Takes more time.
         \\  -h, --help  Show usage
         \\
         \\Creation choices:
@@ -656,7 +656,7 @@ pub fn printUsage(w: *std.Io.Writer) !void {
         \\  --target-version text
         \\  --method ziff|hdiff[:w26|h13|sf20]|file  Or 1|2|3 (default 1)
         \\  --format zip-store|zip-deflate[:N]|tar-zstd[:N]
-        \\    Deflate: 1..9 (default 1); Zstd: 1..22 (default 3)
+        \\    Deflate: 1..9 (default 1). Zstd: 1..22 (default 3).
         \\  --continue-on-errors y|n
         \\  --correct-target-manifest y|n  Correct reported entries in the delta
         \\  Unspecified choices prompt without -a.
