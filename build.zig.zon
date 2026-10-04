@@ -1,6 +1,6 @@
 .{
     .name = .Zift,
-    .version = "1.0.0-dev.1",
+    .version = "1.0.0-dev.2",
     .minimum_zig_version = "0.17.0",
     .paths = .{""},
     .fingerprint = 0xa63db9716029e31f,
