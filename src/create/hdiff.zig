@@ -1,3 +1,4 @@
+const integrations = @import("../integrations.zig");
 const manifest_mod = @import("../core/manifest.zig");
 const std = @import("std");
 
@@ -13,6 +14,7 @@ const tree = @import("../tree.zig");
 const ui = @import("../ui.zig");
 
 pub const CreateOptions = struct {
+    source_identity: ?integrations.Identity = null,
     source_root: []const u8,
     target_root: []const u8,
     source_metadata: []const manifest_mod.MetadataFile,
@@ -46,6 +48,11 @@ pub fn create(
     var bundle = try writer.Builder.init(allocator, io, options.target_root, options.tmp_path, options.format, options.compression_levels);
     errdefer std.Io.Dir.cwd().deleteFile(io, options.tmp_path) catch {};
     defer bundle.deinit();
+    if (options.source_identity) |identity| {
+        const bytes = try std.json.Stringify.valueAlloc(allocator, identity, .{});
+        defer allocator.free(bytes);
+        try bundle.add(.{ .path = delta.source_identity_path, .size = bytes.len, .data = .{ .bytes = bytes } }, null);
+    }
 
     var source_tree = options.source_tree;
     var target_tree = options.target_tree;

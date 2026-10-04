@@ -110,6 +110,7 @@ fn isZstdFrameStart(magic: u32) bool {
 
 const StandardMethod = enum { file_delta, hdiff };
 const StandardControls = struct {
+    source_identity: ?integrations.Identity = null,
     method: StandardMethod,
     hdiff_paths: []const []const u8,
     removals: []const []const u8,
@@ -152,7 +153,10 @@ fn discardWorkspaceGuardRequired(io: std.Io, guard: std.Io.File) !void {
     }
 }
 const PackageState = struct { software: integrations.Software, state: integrations.State };
-const StandardIdentity = struct { detected: integrations.Detected, source_version: ?integrations.Version, target_version: ?integrations.Version };
+const StandardIdentity = struct {
+    installed: ?integrations.Identity = null,
+    target_version: ?integrations.Version = null,
+};
 const HdiffSourceBinding = struct {
     identity: fs.ObjectIdentity,
     size: u64,
@@ -202,54 +206,56 @@ fn rejectPrimaryManifestDirectory(software: integrations.Software, path: []const
 }
 
 fn readStandardZipControls(allocator: std.mem.Allocator, reader: *std.Io.File.Reader, archive: zip.Archive) !StandardControls {
+    const source_identity = if (archive.find(delta.source_identity_path)) |entry|
+        try std.json.parseFromSliceLeaky(integrations.Identity, allocator, try zip.extractEntryAlloc(allocator, reader, entry, 1024 * 1024), .{})
+    else
+        null;
     const hdiff_entry = archive.find("hdifffiles.txt") orelse {
         const deletion_entry = archive.find(delta.file_delta_deletion_path) orelse
-            return .{ .method = .file_delta, .hdiff_paths = &.{}, .removals = &.{} };
+            return .{ .source_identity = source_identity, .method = .file_delta, .hdiff_paths = &.{}, .removals = &.{} };
         const removals = try parseDeletionList(allocator, try zip.extractEntryAlloc(allocator, reader, deletion_entry, 64 * 1024 * 1024));
-        return .{ .method = .file_delta, .hdiff_paths = &.{}, .removals = removals };
+        return .{ .source_identity = source_identity, .method = .file_delta, .hdiff_paths = &.{}, .removals = removals };
     };
     if (archive.find(delta.file_delta_deletion_path) != null) return error.InvalidDeltaLayout;
     const deletion_entry = archive.find("deletefiles.txt") orelse return error.MissingDeletionList;
     const paths = try parseHdiffList(allocator, try zip.extractEntryAlloc(allocator, reader, hdiff_entry, 64 * 1024 * 1024));
     const removals = try parseDeletionList(allocator, try zip.extractEntryAlloc(allocator, reader, deletion_entry, 64 * 1024 * 1024));
-    return .{ .method = .hdiff, .hdiff_paths = paths, .removals = removals };
+    return .{ .source_identity = source_identity, .method = .hdiff, .hdiff_paths = paths, .removals = removals };
 }
 
-fn packageStateZip(allocator: std.mem.Allocator, reader: *std.Io.File.Reader, archive: zip.Archive, detected: ?integrations.Detected) !?PackageState {
-    const value = detected orelse return null;
-    for (archive.directories) |path| try rejectPrimaryManifestDirectory(value.software, path);
+fn packageStateZip(allocator: std.mem.Allocator, reader: *std.Io.File.Reader, archive: zip.Archive, software_value: ?integrations.Software) !?PackageState {
+    const software = software_value orelse return null;
+    for (archive.directories) |path| try rejectPrimaryManifestDirectory(software, path);
     for (archive.entries) |entry| {
-        if (integrations.isPrimaryManifestPath(value.software, entry.path)) break;
+        if (integrations.isPrimaryManifestPath(software, entry.path)) break;
     } else return null;
 
     var files: std.ArrayList(manifest_mod.MetadataFile) = .empty;
     for (archive.entries) |entry| {
-        if (!integrations.isMetadataPath(value.software, entry.path)) continue;
+        if (!integrations.isMetadataPath(software, entry.path)) continue;
         try files.append(allocator, .{
             .path = entry.path,
             .bytes = try zip.extractEntryAlloc(allocator, reader, entry, 128 * 1024 * 1024),
         });
     }
-    return .{ .software = value.software, .state = try integrations.loadExpectedMetadata(allocator, value.software, try files.toOwnedSlice(allocator)) };
+    return .{ .software = software, .state = try integrations.loadExpectedMetadata(allocator, software, try files.toOwnedSlice(allocator)) };
 }
 
-fn standardIdentityZip(allocator: std.mem.Allocator, io: std.Io, directory_path: []const u8, reader: *std.Io.File.Reader, archive: zip.Archive, detected_value: ?integrations.Detected) !?StandardIdentity {
-    const detected = detected_value orelse return null;
-    if (!integrations.integration(detected.software).identity_trustworthy) {
-        return .{ .detected = detected, .source_version = null, .target_version = null };
-    }
-    const source_version = try integrations.detectVersionBestEffort(allocator, io, detected.software, directory_path);
-    var target_version: ?integrations.Version = null;
+fn standardIdentityZip(allocator: std.mem.Allocator, reader: *std.Io.File.Reader, archive: zip.Archive, installed: ?integrations.Identity, software_value: ?integrations.Software) !StandardIdentity {
+    var identity: StandardIdentity = .{ .installed = installed };
+    const software = software_value orelse return identity;
+    if (!integrations.integration(software).identity_trustworthy) return identity;
     for (archive.entries) |entry| {
-        if (!integrations.isPackagedVersionPath(detected.software, entry.path) or entry.zip_entry.uncompressed_size > 1024 * 1024) continue;
+        if (!integrations.isPackagedVersionPath(software, entry.path) or entry.zip_entry.uncompressed_size > 1024 * 1024) continue;
         const bytes = try zip.extractEntryAlloc(allocator, reader, entry, 1024 * 1024);
-        target_version = try integrations.detectPackagedVersion(allocator, detected.software, entry.path, bytes);
-        if (target_version != null) break;
+        identity.target_version = try integrations.detectPackagedVersion(allocator, software, entry.path, bytes);
+        if (identity.target_version != null) break;
     }
-    return .{ .detected = detected, .source_version = source_version, .target_version = target_version };
+    return identity;
 }
 
 fn isStandardControl(method: StandardMethod, path: []const u8) bool {
+    if (std.mem.eql(u8, path, delta.source_identity_path)) return true;
     return switch (method) {
         .file_delta => std.mem.eql(u8, path, delta.file_delta_deletion_path),
         .hdiff => std.mem.eql(u8, path, "hdifffiles.txt") or std.mem.eql(u8, path, "deletefiles.txt"),
@@ -666,7 +672,7 @@ const TarScan = struct {
     entries: []TarEntry,
     controls: StandardControls,
     package: ?PackageState,
-    identity: ?StandardIdentity,
+    identity: StandardIdentity,
 };
 
 fn scanStandardTar(
@@ -683,15 +689,9 @@ fn scanStandardTar(
     var prefix_stream = try tar_zstd.Stream.initBorrowed(allocator, io, archive_file, 0, archive_size);
     defer prefix_stream.deinit();
 
-    const detected = try integrations.detect(io, directory_path);
-    const source_version = if (detected) |value|
-        if (integrations.integration(value.software).identity_trustworthy)
-            try integrations.detectVersionBestEffort(allocator, io, value.software, directory_path)
-        else
-            null
-    else
-        null;
-    var target_version: ?integrations.Version = null;
+    const installed = try integrations.detectIdentity(allocator, io, directory_path);
+    var source_identity: ?integrations.Identity = null;
+    var manifest_directories: std.ArrayList([]const u8) = .empty;
     var entries: std.ArrayList(TarEntry) = .empty;
     var metadata: std.ArrayList(manifest_mod.MetadataFile) = .empty;
     var hdiff_bytes: ?[]const u8 = null;
@@ -706,7 +706,12 @@ fn scanStandardTar(
             return error.InvalidDeltaLayout;
         if (file.kind == .directory) {
             if (file.size != 0) return error.UnsupportedTarEntry;
-            if (detected) |value| try rejectPrimaryManifestDirectory(value.software, file.name);
+            for (std.enums.values(integrations.Software)) |software| {
+                if (integrations.isPrimaryManifestPath(software, file.name)) {
+                    try manifest_directories.append(allocator, try allocator.dupe(u8, file.name));
+                    break;
+                }
+            }
             if (progress) |value| try value.finishFile();
             continue;
         }
@@ -715,7 +720,12 @@ fn scanStandardTar(
         const path = try allocator.dupe(u8, file.name);
         var prefix: ?[]const u8 = null;
         var scan_md5: ?[16]u8 = null;
-        if (std.mem.eql(u8, file.name, "hdifffiles.txt")) {
+        if (std.mem.eql(u8, file.name, delta.source_identity_path)) {
+            if (source_identity != null) return error.InvalidDeltaLayout;
+            const bytes = try stream.readCurrentAlloc(allocator, file, 1024 * 1024);
+            scan_md5 = md5Bytes(bytes);
+            source_identity = try std.json.parseFromSliceLeaky(integrations.Identity, allocator, bytes, .{});
+        } else if (std.mem.eql(u8, file.name, "hdifffiles.txt")) {
             hdiff_bytes = try stream.readCurrentAlloc(allocator, file, 64 * 1024 * 1024);
             scan_md5 = md5Bytes(hdiff_bytes.?);
         } else if (std.mem.eql(u8, file.name, "deletefiles.txt")) {
@@ -724,24 +734,12 @@ fn scanStandardTar(
         } else if (std.mem.eql(u8, file.name, delta.file_delta_deletion_path)) {
             file_delta_deletion_bytes = try stream.readCurrentAlloc(allocator, file, 64 * 1024 * 1024);
             scan_md5 = md5Bytes(file_delta_deletion_bytes.?);
-        } else if (detected) |value| {
-            if (integrations.integration(value.software).identity_trustworthy and
-                integrations.isPackagedVersionPath(value.software, file.name) and file.size <= 1024 * 1024)
-            {
-                const bytes = try stream.readCurrentAlloc(allocator, file, 1024 * 1024);
+        } else if (archiveMetadataKind(if (source_identity) |value| value.software else null, file.name)) |kind| {
+            const limit: usize = if (kind == .manifest) 128 * 1024 * 1024 else 1024 * 1024;
+            if (file.size <= limit) {
+                const bytes = try stream.readCurrentAlloc(allocator, file, limit);
                 scan_md5 = md5Bytes(bytes);
-                target_version = try integrations.detectPackagedVersion(allocator, value.software, file.name, bytes);
-            } else if (integrations.isMetadataPath(value.software, file.name)) {
-                const bytes = try stream.readCurrentAlloc(allocator, file, 128 * 1024 * 1024);
-                scan_md5 = md5Bytes(bytes);
-                try metadata.append(allocator, .{
-                    .path = path,
-                    .bytes = bytes,
-                });
-            } else if (std.mem.endsWith(u8, file.name, ".hdiff")) {
-                const observed = try stream.readCurrentPrefixAllocMd5(allocator, file, hdiff.info_prefix_size);
-                prefix = observed.bytes;
-                scan_md5 = observed.md5;
+                try metadata.append(allocator, .{ .path = path, .bytes = bytes });
             }
         } else if (std.mem.endsWith(u8, file.name, ".hdiff")) {
             const observed = try stream.readCurrentPrefixAllocMd5(allocator, file, hdiff.info_prefix_size);
@@ -780,35 +778,58 @@ fn scanStandardTar(
         if (file_delta_deletion_bytes != null) return error.InvalidDeltaLayout;
         const deletion = hdiff_deletion_bytes orelse return error.MissingDeletionList;
         break :blk .{
+            .source_identity = source_identity,
             .method = .hdiff,
             .hdiff_paths = try parseHdiffList(allocator, bytes),
             .removals = try parseDeletionList(allocator, deletion),
         };
     } else .{
+        .source_identity = source_identity,
         .method = .file_delta,
         .hdiff_paths = &.{},
         .removals = if (file_delta_deletion_bytes) |bytes| try parseDeletionList(allocator, bytes) else &.{},
     };
 
     var package: ?PackageState = null;
-    if (detected) |value| {
+    var identity: StandardIdentity = .{ .installed = installed };
+    if (source_identity orelse installed) |value| {
+        for (manifest_directories.items) |path| try rejectPrimaryManifestDirectory(value.software, path);
+        for (entries.items) |entry| {
+            if (integrations.isMetadataPath(value.software, entry.path) and entry.size > 128 * 1024 * 1024) return error.FileTooLarge;
+        }
+        var manifests: std.ArrayList(manifest_mod.MetadataFile) = .empty;
+        var primary_present = false;
         for (metadata.items) |file| {
-            if (integrations.isPrimaryManifestPath(value.software, file.path)) {
-                package = .{
-                    .software = value.software,
-                    .state = try integrations.loadExpectedMetadata(allocator, value.software, try metadata.toOwnedSlice(allocator)),
-                };
-                break;
+            if (integrations.isMetadataPath(value.software, file.path)) {
+                try manifests.append(allocator, file);
+                primary_present = primary_present or integrations.isPrimaryManifestPath(value.software, file.path);
+            } else if (integrations.integration(value.software).identity_trustworthy and
+                integrations.isPackagedVersionPath(value.software, file.path))
+            {
+                identity.target_version = try integrations.detectPackagedVersion(allocator, value.software, file.path, file.bytes);
             }
         }
+        if (primary_present) package = .{
+            .software = value.software,
+            .state = try integrations.loadExpectedMetadata(allocator, value.software, manifests.items),
+        };
     }
 
     return .{
         .entries = try entries.toOwnedSlice(allocator),
         .controls = controls,
         .package = package,
-        .identity = if (detected) |value| .{ .detected = value, .source_version = source_version, .target_version = target_version } else null,
+        .identity = identity,
     };
+}
+
+fn archiveMetadataKind(selected: ?integrations.Software, path: []const u8) ?enum { manifest, version } {
+    for (std.enums.values(integrations.Software)) |software| {
+        if (selected != null and selected.? != software) continue;
+        if (integrations.isMetadataPath(software, path)) return .manifest;
+        if (integrations.isPackagedVersionPath(software, path)) return .version;
+    }
+    return null;
 }
 
 fn confirmTarHdiffPrefix(
@@ -942,17 +963,18 @@ fn standardPreflight(
     method: StandardMethod,
     target_count: usize,
     removal_count: usize,
-    identity: ?StandardIdentity,
+    identity: StandardIdentity,
+    source_identity: ?integrations.Identity,
     space_required: u64,
     force: bool,
     out: *std.Io.Writer,
 ) !void {
     try ui.writeHeading(out, "Apply delta:");
     try out.writeByte('\n');
-    if (identity) |value| {
-        try ui.writeField(out, "    Software:", value.detected.name());
-        if (value.source_version) |source_version| {
-            if (value.target_version) |target_version| try ui.writeDeltaField(out, source_version.full, target_version.full);
+    if (source_identity orelse identity.installed) |value| {
+        try ui.writeField(out, "    Software:", integrations.displayName(value.software));
+        if (value.version.len != 0) {
+            if (identity.target_version) |target_version| try ui.writeDeltaField(out, value.version, target_version.full);
         }
     }
     try ui.writeField(out, "    Method:", if (method == .hdiff) "HDiff" else "File Delta");
@@ -997,9 +1019,13 @@ fn applyStandardZip(
     counters: *integrity_run.Counters,
 ) !void {
     var controls = readStandardZipControls(allocator, reader, archive) catch |err| return reportApplyError(out, delta_path, directory_path, err);
-    const detected = integrations.detect(io, directory_path) catch |err| return reportApplyError(out, delta_path, directory_path, err);
-    const identity = standardIdentityZip(allocator, io, directory_path, reader, archive, detected) catch |err| return reportApplyError(out, delta_path, directory_path, err);
-    const package = packageStateZip(allocator, reader, archive, detected) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    const installed = integrations.detectIdentity(allocator, io, directory_path) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    if (!force and !try integrations.checkSourceCompatibility(controls.source_identity, installed, out)) {
+        if (!try cli.promptYesNo(allocator, io, out, "Apply anyway?", false)) return error.Aborted;
+    }
+    const software = if (controls.source_identity orelse installed) |value| value.software else null;
+    const identity = standardIdentityZip(allocator, reader, archive, installed, software) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    const package = packageStateZip(allocator, reader, archive, software) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const verify_hashes = try standardHashVerification(package, verify_md5, out);
     const target_paths = standardTargetPaths(allocator, archive.entries, controls) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const expected_entries: []const manifest_mod.File = if (package) |value| value.state.expected.entries else &.{};
@@ -1019,7 +1045,7 @@ fn applyStandardZip(
     };
     try checking.finish();
     try reportSourceProblems(out, space.sources);
-    try standardPreflight(allocator, io, archive_size, delta_path, directory_path, assume_yes, controls.method, target_paths.len, controls.removals.len, identity, space.required, force, out);
+    try standardPreflight(allocator, io, archive_size, delta_path, directory_path, assume_yes, controls.method, target_paths.len, controls.removals.len, identity, controls.source_identity, space.required, force, out);
     try out.flush();
 
     var workspace = transaction.Workspace.create(allocator, io, preflight_directory, path_layout.representability_paths) catch |err| return reportApplyError(out, delta_path, directory_path, err);
@@ -1694,6 +1720,9 @@ fn applyStandardTar(
     };
     try checking.finish();
 
+    if (!force and !try integrations.checkSourceCompatibility(scan.controls.source_identity, scan.identity.installed, out)) {
+        if (!try cli.promptYesNo(allocator, io, out, "Apply anyway?", false)) return error.Aborted;
+    }
     const verify_hashes = try standardHashVerification(scan.package, verify_md5, out);
     const target_paths = standardTargetPaths(allocator, scan.entries, scan.controls) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const expected_entries: []const manifest_mod.File = if (scan.package) |value| value.state.expected.entries else &.{};
@@ -1711,7 +1740,7 @@ fn applyStandardTar(
     };
     try checking.finish();
     try reportSourceProblems(out, space.sources);
-    try standardPreflight(allocator, io, archive_size, delta_path, directory_path, assume_yes, scan.controls.method, target_paths.len, scan.controls.removals.len, scan.identity, space.required, force, out);
+    try standardPreflight(allocator, io, archive_size, delta_path, directory_path, assume_yes, scan.controls.method, target_paths.len, scan.controls.removals.len, scan.identity, scan.controls.source_identity, space.required, force, out);
     try out.flush();
 
     var workspace = transaction.Workspace.create(allocator, io, preflight_directory, path_layout.representability_paths) catch |err| return reportApplyError(out, delta_path, directory_path, err);
@@ -2470,6 +2499,7 @@ test "standard preflight reports retained archive size without reopening its pat
         .file_delta,
         0,
         0,
+        .{},
         null,
         0,
         false,
@@ -2927,7 +2957,7 @@ test "ZIP primary manifest directory is present-invalid instead of absent" {
     const archive: zip.Archive = .{ .entries = &.{}, .directories = &.{"pkg_version"} };
     try std.testing.expectError(
         error.InvalidExpectedState,
-        packageStateZip(allocator, &reader, archive, .{ .software = .zzz }),
+        packageStateZip(allocator, &reader, archive, .zzz),
     );
 }
 
@@ -2958,12 +2988,12 @@ test "oversized packaged identity evidence does not hide a valid manifest state"
     var buffer: [64 * 1024]u8 = undefined;
     var reader = file.reader(io, &buffer);
     const archive = try zip.readCentral(allocator, &reader);
-    const detected = try integrations.detect(io, root);
-    const identity = (try standardIdentityZip(allocator, io, root, &reader, archive, detected)).?;
-    try std.testing.expectEqual(@as(?integrations.Version, null), identity.source_version);
+    const installed = try integrations.detectIdentity(allocator, io, root);
+    const identity = try standardIdentityZip(allocator, &reader, archive, installed, installed.?.software);
+    try std.testing.expectEqualStrings("", identity.installed.?.version);
     try std.testing.expectEqual(@as(?integrations.Version, null), identity.target_version);
 
-    const package = (try packageStateZip(allocator, &reader, archive, detected)).?;
+    const package = (try packageStateZip(allocator, &reader, archive, installed.?.software)).?;
     try std.testing.expectEqual(integrations.Software.zzz, package.software);
     try std.testing.expectEqual(@as(usize, 1), package.state.expected.entries.len);
     try std.testing.expectEqualStrings("core.bin", package.state.expected.entries[0].path);
@@ -2995,10 +3025,10 @@ test "WuWa standard archive identity keeps software detection but suppresses ver
     var buffer: [64 * 1024]u8 = undefined;
     var reader = file.reader(io, &buffer);
     const archive = try zip.readCentral(allocator, &reader);
-    const detected = try integrations.detect(io, root);
-    const identity = (try standardIdentityZip(allocator, io, root, &reader, archive, detected)).?;
-    try std.testing.expectEqual(integrations.Software.wuwa, identity.detected.software);
-    try std.testing.expectEqual(@as(?integrations.Version, null), identity.source_version);
+    const installed = try integrations.detectIdentity(allocator, io, root);
+    const identity = try standardIdentityZip(allocator, &reader, archive, installed, installed.?.software);
+    try std.testing.expectEqual(integrations.Software.wuwa, identity.installed.?.software);
+    try std.testing.expectEqualStrings("", identity.installed.?.version);
     try std.testing.expectEqual(@as(?integrations.Version, null), identity.target_version);
 }
 
@@ -3390,4 +3420,53 @@ test "HDiff tar.zst apply preserves a literal zift-work target" {
     try std.testing.expectEqualStrings("abXd", got);
     try std.testing.expectEqualStrings("new user bytes", user);
     try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".zift-work-1", .{}));
+}
+
+test "archive compatibility metadata selects the patch integration and is never installed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    for ([_]@import("../archive.zig").Format{ .zip_store, .zip_deflate, .tar_zstd }) |format| {
+        for ([_]bool{ false, true }) |metadata_first| {
+            for ([_]bool{ false, true }) |bad_keep| {
+                var tmp = std.testing.tmpDir(.{});
+                defer tmp.cleanup();
+                const root = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+                const package_path = try a.print("{s}/delta{s}", .{ root, format.extension() });
+                try tmp.dir.writeFile(io, .{ .sub_path = "keep", .data = if (bad_keep) "oops" else "kept" });
+                const identity = "{\"software\":\"zzz\",\"version\":\"OSPRODWin1.0.0\"}";
+                const identity_entry: @import("../archive.zig").Source = .{
+                    .path = delta.source_identity_path,
+                    .size = identity.len,
+                    .data = .{ .bytes = identity },
+                };
+                {
+                    var builder = try @import("../archive/writer.zig").Builder.init(a, io, root, package_path, format, .{});
+                    defer builder.deinit();
+                    if (metadata_first) try builder.add(identity_entry, null);
+                    try builder.add(.{ .path = "new", .size = 3, .data = .{ .bytes = "new" } }, null);
+                    var new_md5: [16]u8 = undefined;
+                    var keep_md5: [16]u8 = undefined;
+                    std.crypto.hash.Md5.hash("new", &new_md5, .{});
+                    std.crypto.hash.Md5.hash("kept", &keep_md5, .{});
+                    const manifest = try a.print(
+                        "{{\"remoteName\":\"new\",\"fileSize\":3,\"md5\":\"{x}\"}}\n" ++
+                            "{{\"remoteName\":\"keep\",\"fileSize\":4,\"md5\":\"{x}\"}}\n",
+                        .{ new_md5, keep_md5 },
+                    );
+                    try builder.add(.{ .path = "pkg_version", .size = manifest.len, .data = .{ .bytes = manifest } }, null);
+                    if (!metadata_first) try builder.add(identity_entry, null);
+                    try builder.finish();
+                }
+                var output: std.Io.Writer.Allocating = .init(a);
+                const result = apply(a, io, package_path, root, true, true, true, &output.writer);
+                if (bad_keep) try std.testing.expectError(error.CompletedWithErrors, result) else try result;
+                try std.testing.expectEqualStrings("new", try tmp.dir.readFileAlloc(io, "new", a, .limited(16)));
+                try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, delta.source_identity_path, .{}));
+                try std.testing.expect(std.mem.indexOf(u8, output.written(), "Hashes are unavailable") == null);
+                try std.testing.expect(std.mem.indexOf(u8, output.written(), "Software: Zenless Zone Zero") != null);
+            }
+        }
+    }
 }

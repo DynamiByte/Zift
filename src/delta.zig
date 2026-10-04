@@ -27,6 +27,7 @@ pub const Method = enum {
 
 // separate control name; deletefiles.txt allowed as payload
 pub const file_delta_deletion_path = ".zift-file-delta-deletefiles-v1.txt";
+pub const source_identity_path = ".zift-source-v1.json";
 
 pub fn deletionBytes(
     allocator: std.mem.Allocator,

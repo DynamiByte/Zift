@@ -17,11 +17,13 @@ zift source target out.ziff -a -y --source-version 1.0 --target-version 1.1
 
 Ziff (`.ziff`) is the default format. File Delta and HDiff are also available in ZIP or tar.zst containers.
 
-Optional integrations: Zenless Zone Zero, Genshin Impact, Arknights: Endfield, and Wuthering Waves. Other directories work without an integration. Clean requires a supported integration and its manifest.
+Integrations are an optional feature let Zift understand manifests and version information for supported software. Zift uses this to compare directories faster, verify files, clean up extra files, and warn when a delta expects different software or a different source version.
+
+Currently supported integrations: Zenless Zone Zero, Genshin Impact, Arknights: Endfield, and Wuthering Waves.
 
 ## Options
 
-- `-a` Accept defaults automatically.
+- `-a` Accept defaults automatically. Explicit choices take priority.
 - `-c` Perform a Complete Clean.
 - `-m` Reduce matching memory. Creation may take longer.
 - `-y` Skip the final confirmation.
@@ -37,8 +39,6 @@ Creation choices:
 - `--method ziff|hdiff[:w26|h13|sf20]|file` Default: Ziff. HDiff defaults to W26. Also accepts `1|2|3`.
 - `--format zip-store|zip-deflate[:N]|tar-zstd[:N]` File Delta/HDiff only. Deflate: `1`–`9` (default `1`). Zstd: `1`–`22` (default `3`).
 - `--correct-target-manifest y|n` Correct reported target entries in the delta.
-
-Explicit choices override `-a`. Without `-a`, omitted choices prompt. `-a` and `-y` do not approve content issues or Ziff compatibility mismatches. `-f` leaves content integrity checks enabled.
 
 Ctrl+C cancels active work. Interrupted Ziff applies resume on the next run.
 

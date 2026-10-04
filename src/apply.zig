@@ -95,10 +95,14 @@ const ZiffConfirmation = struct {
         const context: *ZiffConfirmation = @ptrCast(@alignCast(raw_context.?));
         context.progress.finish();
         const header = context.header;
-        if (!context.force and !preview.resuming and !preview.already_completed and
-            !try checkSourceCompatibility(context.allocator, context.io, header.*, context.directory_path, context.out))
-        {
-            if (!try cli.promptYesNo(context.allocator, context.io, context.out, "Apply anyway?", false)) return false;
+        if (!context.force and !preview.resuming and !preview.already_completed) {
+            if (integrations.fromIntegrationId(header.software_id)) |software| {
+                const installed = try integrations.detectIdentity(context.allocator, context.io, context.directory_path);
+                defer if (installed) |value| context.allocator.free(value.version);
+                if (!try integrations.checkSourceCompatibility(.{ .software = software, .version = header.source_identity }, installed, context.out)) {
+                    if (!try cli.promptYesNo(context.allocator, context.io, context.out, "Apply anyway?", false)) return false;
+                }
+            }
         }
         try ui.writeHeading(context.out, "Apply delta:");
         try context.out.writeByte('\n');
@@ -127,31 +131,6 @@ const ZiffConfirmation = struct {
         return confirmed;
     }
 };
-
-fn checkSourceCompatibility(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    header: ziff.Header,
-    directory_path: []const u8,
-    out: *std.Io.Writer,
-) !bool {
-    const software = integrations.fromIntegrationId(header.software_id) orelse return true;
-    const detected = try integrations.detect(io, directory_path);
-    if (detected == null or detected.?.software != software) {
-        try ui.writeWarningLine(out, "The selected directory does not match this delta's software.");
-        try ui.writeField(out, "Expected software:", integrations.displayName(software));
-        try ui.writeField(out, "Detected software:", if (detected) |value| value.name() else "unknown");
-        return false;
-    }
-    if (!integrations.integration(software).identity_trustworthy or header.source_identity.len == 0) return true;
-    const version = try integrations.detectVersionBestEffort(allocator, io, software, directory_path);
-    defer if (version) |value| allocator.free(value.full);
-    if (version) |value| if (std.mem.eql(u8, value.full, header.source_identity)) return true;
-    try ui.writeWarningLine(out, "The source version does not match this delta.");
-    try ui.writeField(out, "Expected version:", header.source_identity);
-    try ui.writeField(out, "Detected version:", if (version) |value| value.full else "unknown");
-    return false;
-}
 
 fn applyZiff(
     allocator: std.mem.Allocator,
@@ -301,55 +280,6 @@ fn reportDeltaReadError(out: *std.Io.Writer, delta_path: []const u8, err: anyerr
         },
         else => return err,
     }
-}
-
-test "Ziff compatibility checks software and trustworthy full source versions" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path });
-    try tmp.dir.writeFile(io, .{ .sub_path = "ZenlessZoneZero.exe", .data = "" });
-    try tmp.dir.createDirPath(io, "Game_Data");
-    try tmp.dir.writeFile(io, .{ .sub_path = "Game_Data/resources.assets", .data = "app_version {\"DispatchVersion\":\"OSPRODWin3.2.0\"}" });
-    var header: ziff.Header = .{ .software_id = integrations.integrationId(.zzz), .source_identity = "OSPRODWin3.2.0" };
-    var output: std.Io.Writer.Allocating = .init(a);
-    try std.testing.expect(try checkSourceCompatibility(a, io, header, root, &output.writer));
-    try std.testing.expectEqualStrings("", output.written());
-
-    header.source_identity = "CNPRODWin3.2.0";
-    try std.testing.expect(!try checkSourceCompatibility(a, io, header, root, &output.writer));
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Expected version: CNPRODWin3.2.0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Detected version: OSPRODWin3.2.0") != null);
-    try tmp.dir.deleteFile(io, "Game_Data/resources.assets");
-    output.clearRetainingCapacity();
-    try std.testing.expect(!try checkSourceCompatibility(a, io, header, root, &output.writer));
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Detected version: unknown") != null);
-
-    header.software_id = integrations.integrationId(.genshin);
-    output.clearRetainingCapacity();
-    try std.testing.expect(!try checkSourceCompatibility(a, io, header, root, &output.writer));
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Expected software: Genshin Impact") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Detected software: Zenless Zone Zero") != null);
-    try tmp.dir.deleteFile(io, "ZenlessZoneZero.exe");
-    output.clearRetainingCapacity();
-    try std.testing.expect(!try checkSourceCompatibility(a, io, header, root, &output.writer));
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Detected software: unknown") != null);
-
-    header.software_id = 0;
-    output.clearRetainingCapacity();
-    try std.testing.expect(try checkSourceCompatibility(a, io, header, root, &output.writer));
-    try std.testing.expectEqualStrings("", output.written());
-
-    header.software_id = integrations.integrationId(.wuwa);
-    try tmp.dir.createDirPath(io, "Client/Binaries/Win64/ThirdParty/KrPcSdk_Global/KRSDKRes");
-    try tmp.dir.writeFile(io, .{ .sub_path = "Wuthering Waves.exe", .data = "" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "Client/Binaries/Win64/Client-Win64-Shipping.exe", .data = "" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "Client/Binaries/Win64/ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDK.bin", .data = "untrustworthy version" });
-    try std.testing.expect(try checkSourceCompatibility(a, io, header, root, &output.writer));
-    try std.testing.expectEqualStrings("", output.written());
 }
 
 test "Ziff compatibility confirmation is bypassed by force and bound recovery" {

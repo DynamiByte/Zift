@@ -1,3 +1,4 @@
+const integrations = @import("../integrations.zig");
 const manifest_mod = @import("../core/manifest.zig");
 const std = @import("std");
 const Thread = std.Thread;
@@ -14,6 +15,7 @@ const max_archive_workers: usize = 16;
 const archive_batch_bytes: u64 = 256 * 1024 * 1024;
 
 pub const CreateOptions = struct {
+    source_identity: ?integrations.Identity = null,
     source_metadata: []const manifest_mod.MetadataFile,
     target_root: []const u8,
     target_metadata: []const manifest_mod.MetadataFile,
@@ -38,6 +40,11 @@ pub fn create(
     var bundle = try writer.Builder.init(allocator, io, options.target_root, options.tmp_path, options.format, options.compression_levels);
     errdefer std.Io.Dir.cwd().deleteFile(io, options.tmp_path) catch {};
     defer bundle.deinit();
+    if (options.source_identity) |identity| {
+        const bytes = try std.json.Stringify.valueAlloc(allocator, identity, .{});
+        defer allocator.free(bytes);
+        try bundle.add(.{ .path = delta.source_identity_path, .size = bytes.len, .data = .{ .bytes = bytes } }, null);
+    }
 
     const target_tree = options.target_tree;
 

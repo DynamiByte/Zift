@@ -298,6 +298,7 @@ pub fn run(
     if (!try cli.confirm(allocator, io, out, assume_yes)) return error.Aborted;
     (switch (method) {
         .file_delta => file_delta.create(allocator, io, .{
+            .source_identity = if (software) |value| .{ .software = value, .version = source_index_version } else null,
             .source_metadata = source.metadata(),
             .target_root = target.path,
             .target_metadata = target.metadata(),
@@ -312,6 +313,7 @@ pub fn run(
         .hdiff => hdiff_delta.create(allocator, io, .{
             .source_root = source.path,
             .target_root = target.path,
+            .source_identity = if (software) |value| .{ .software = value, .version = source_index_version } else null,
             .source_metadata = source.metadata(),
             .target_metadata = target.metadata(),
             .source_tree = source_tree,
@@ -804,6 +806,7 @@ fn validateArchivePaths(method: Method, target_tree: tree.Tree, plan: planner.Pl
 }
 
 fn isReservedPath(method: Method, path: []const u8) bool {
+    if (method != .ziff and std.mem.eql(u8, path, delta.source_identity_path)) return true;
     return switch (method) {
         .file_delta => std.mem.eql(u8, path, delta.file_delta_deletion_path),
         .hdiff => std.mem.eql(u8, path, "hdifffiles.txt") or std.mem.eql(u8, path, "deletefiles.txt"),

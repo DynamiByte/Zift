@@ -136,6 +136,36 @@ pub fn usablePair(source: InstallView, target: InstallView) bool {
         source.state != null and target.state != null;
 }
 
+pub const Identity = struct {
+    software: Software,
+    version: []const u8 = "",
+};
+
+pub fn detectIdentity(allocator: std.mem.Allocator, io: std.Io, root: []const u8) !?Identity {
+    const detected = try detect(io, root) orelse return null;
+    const version = if (integration(detected.software).identity_trustworthy)
+        try detectVersionBestEffort(allocator, io, detected.software, root)
+    else
+        null;
+    return .{ .software = detected.software, .version = if (version) |value| value.full else "" };
+}
+
+pub fn checkSourceCompatibility(expected_value: ?Identity, installed: ?Identity, out: *std.Io.Writer) !bool {
+    const expected = expected_value orelse return true;
+    if (installed == null or installed.?.software != expected.software) {
+        try ui.writeWarningLine(out, "The selected directory does not match this delta's software.");
+        try ui.writeField(out, "Expected software:", displayName(expected.software));
+        try ui.writeField(out, "Detected software:", if (installed) |value| displayName(value.software) else "unknown");
+        return false;
+    }
+    if (!integration(expected.software).identity_trustworthy or expected.version.len == 0) return true;
+    if (std.mem.eql(u8, installed.?.version, expected.version)) return true;
+    try ui.writeWarningLine(out, "The source version does not match this delta.");
+    try ui.writeField(out, "Expected version:", expected.version);
+    try ui.writeField(out, "Detected version:", if (installed.?.version.len != 0) installed.?.version else "unknown");
+    return false;
+}
+
 pub const Detected = struct {
     software: Software,
 
