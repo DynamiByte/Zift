@@ -371,10 +371,11 @@ pub const Progress = struct {
         try self.writer.flush();
     }
 
-    fn writeLine(self: *Progress, active: bool, now: i96, percent_override: ?usize, width: usize, mode: std.Io.Terminal.Mode) !void {
+    fn writeLine(self: *Progress, active: bool, now: i96, percent_override: ?usize, row_layout: Layout, mode: std.Io.Terminal.Mode) !void {
         self.last_draw_bytes = self.done_bytes;
         self.last_draw_files = self.done_files;
         const pct = percent_override orelse self.percent();
+        const width = row_layout.bar_width;
         const filled = if (self.indeterminate) 0 else (pct * width) / 100;
         const arrow: ?usize = if (active) self.arrowPosition(filled, width, now) else null;
 
@@ -382,36 +383,33 @@ pub const Progress = struct {
         try self.writeBarWidth(filled, arrow, width, mode);
         if (!self.indeterminate) {
             try self.writer.writeByte(' ');
-            try self.writer.print("{d: >3}%", .{pct});
+            try self.writer.print("{d}%", .{pct});
         }
-        if (self.total_bytes > 0 or self.byte_columns != null) {
+        if (row_layout.bytes and (self.total_bytes > 0 or self.byte_columns != null)) {
             var done_buf: [64]u8 = undefined;
             var total_buf: [64]u8 = undefined;
-            const widths = self.byteLayout();
             try self.writer.writeAll("  ");
-            try self.writer.print("{[0]s: >[1]}/{[2]s: >[3]}", .{
+            try self.writer.print("{s}/{s}", .{
                 try bytes(&done_buf, @min(self.done_bytes, self.total_bytes)),
-                widths.current,
                 try bytes(&total_buf, self.total_bytes),
-                widths.total,
             });
-        } else if ((self.indeterminate or self.show_speed) and self.done_bytes != 0) {
+        } else if (row_layout.bytes and self.done_bytes != 0) {
             var done_buf: [64]u8 = undefined;
             try self.writer.writeAll("  ");
-            try self.writer.print("{s: >11}", .{try bytes(&done_buf, self.done_bytes)});
+            try self.writer.writeAll(try bytes(&done_buf, self.done_bytes));
         }
-        if (self.item_label) |label| if (self.total_files != 0 or self.done_files != 0) {
+        if (self.item_label) |label| if (row_layout.files) {
             try self.writer.writeAll("  ");
             try self.writer.writeAll(label);
             try self.writer.writeByte(' ');
             if (self.total_files != 0) {
-                try self.writer.print("{[0]d: >[1]}/{[2]d}", .{ @min(self.done_files, self.total_files), std.fmt.count("{d}", .{self.total_files}), self.total_files });
+                try self.writer.print("{d}/{d}", .{ @min(self.done_files, self.total_files), self.total_files });
             } else try self.writer.print("{d}", .{self.done_files});
         };
-        if (self.show_speed and self.activity_bytes != 0) {
+        if (row_layout.speed and self.activity_bytes != 0) {
             var speed_buf: [64]u8 = undefined;
             try self.writer.writeAll("  ");
-            try self.writer.print("{s: >13}", .{try self.speed(&speed_buf)});
+            try self.writer.writeAll(try self.speed(&speed_buf));
         }
     }
 
@@ -469,19 +467,49 @@ pub const Progress = struct {
         return @max(used, self.label_columns);
     }
 
-    fn barWidth(self: Progress, columns: usize) usize {
+    const Layout = struct {
+        bar_width: usize,
+        bytes: bool,
+        files: bool,
+        speed: bool,
+    };
+
+    fn layout(self: Progress, columns: usize) Layout {
         var reserved = self.labelColumns() + 2 + 5 + 1;
+        var byte_width: usize = 0;
         if (self.total_bytes != 0 or self.byte_columns != null) {
             const widths = self.byteLayout();
-            reserved += 2 + widths.current + 1 + widths.total;
+            byte_width = 2 + widths.current + 1 + widths.total;
         } else if (self.indeterminate or self.show_speed) {
-            reserved += 2 + 11;
+            byte_width = 2 + 11;
         }
-        if (self.item_label) |label| if (self.total_files != 0) {
-            reserved += 2 + label.len + 1 + std.fmt.count("{d}", .{self.total_files}) * 2 + 1;
+        var file_width: usize = 0;
+        if (self.item_label) |label| if (self.total_files != 0 or self.done_files != 0) {
+            file_width = 2 + label.len + 1 + if (self.total_files != 0)
+                std.fmt.count("{d}", .{self.total_files}) * 2 + 1
+            else
+                std.fmt.count("{d}", .{self.done_files});
         };
-        if (self.show_speed) reserved += 2 + 13;
-        return std.math.clamp(columns -| reserved, min_bar_width, max_bar_width);
+        var result: Layout = .{ .bar_width = 0, .bytes = byte_width != 0, .files = file_width != 0, .speed = self.show_speed };
+        reserved += byte_width + file_width + if (result.speed) @as(usize, 15) else 0;
+        if (columns -| reserved < min_bar_width and result.speed) {
+            result.speed = false;
+            reserved -= 15;
+        }
+        if (columns -| reserved < min_bar_width and result.files and result.bytes) {
+            result.files = false;
+            reserved -= file_width;
+        }
+        if (columns <= reserved and result.bytes) {
+            result.bytes = false;
+            reserved -= byte_width;
+        }
+        if (columns <= reserved and result.files) {
+            result.files = false;
+            reserved -= file_width;
+        }
+        result.bar_width = @min(columns -| reserved, max_bar_width);
+        return result;
     }
 
     fn byteLayout(self: Progress) ByteColumns {
@@ -674,7 +702,7 @@ fn writeProgressRow(writer: *std.Io.Writer, row: Progress, now: i96, percent: ?u
     var view = row;
     view.writer = &output;
     const columns = if (liveProgress(writer)) terminalColumns(row.io, streamState(writer).file) else std.math.maxInt(usize);
-    try view.writeLine(active, now, percent, row.barWidth(columns), streamState(writer).mode);
+    try view.writeLine(active, now, percent, row.layout(columns), streamState(writer).mode);
     const line = output.buffered();
     var end: usize = 0;
     var visible: usize = 0;
@@ -1027,7 +1055,7 @@ test "terminal progress uses one accent without coloring counts or speed" {
     };
     try progress.finish();
     try std.testing.expectEqualStrings(
-        "\x1b[1mTesting:\x1b[0m             [\x1b[36m#########################\x1b[0m] 100%  1.00 KiB/1.00 KiB  files 2/2          0 B/s\x1b[0m\n",
+        "\x1b[1mTesting:\x1b[0m             [\x1b[36m#########################\x1b[0m] 100%  1.00 KiB/1.00 KiB  files 2/2  0 B/s\x1b[0m\n",
         output.written(),
     );
     try std.testing.expect(!progress.started);
@@ -1087,7 +1115,7 @@ test "reading starts after metadata progress completes and never resets between 
     try std.testing.expectEqual(@as(usize, 99), progress.percent());
     try progress.finishFile();
     try progress.finish();
-    try std.testing.expect(std.mem.indexOf(u8, output.written()[reading_start..], "100%    16.00 MiB/  16.00 MiB") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written()[reading_start..], "100%  16.00 MiB/16.00 MiB") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[1A") == null);
     try std.testing.expect(std.mem.endsWith(u8, output.written(), "\n"));
 }
@@ -1163,7 +1191,7 @@ test "redirected stages are sequential and empty reading work emits no bar" {
     const metadata_end = std.mem.indexOf(u8, text, "100%  files 2/2").?;
     const reading_start = std.mem.indexOf(u8, text, "Reading contents...\n").?;
     try std.testing.expect(metadata_end < reading_start);
-    try std.testing.expect(std.mem.indexOf(u8, text, "100%    32.00 MiB/  32.00 MiB") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "100%  32.00 MiB/32.00 MiB") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b") == null);
     progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Comparing", .total_files = 1 };
     const start = output.written().len;
@@ -1195,38 +1223,37 @@ test "early read exits preserve stage geometry and report only physical bytes" {
     defer output.deinit();
     var progress: Progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Comparing" };
     try progress.startReading(2, 1024 * 1024);
-    const width = progress.barWidth(80);
+    const width = progress.layout(80).bar_width;
     try progress.addBytes(128 * 1024);
     progress.reconcileRead(768 * 1024, 128 * 1024);
     try progress.finishFile();
     try std.testing.expectEqual(@as(usize, 33), progress.percent());
-    try std.testing.expectEqual(width, progress.barWidth(80));
+    try std.testing.expectEqual(width, progress.layout(80).bar_width);
     try progress.addBytes(256 * 1024);
     try std.testing.expectEqual(@as(usize, 99), progress.percent());
     try progress.finishFile();
     try progress.finish();
     try std.testing.expectEqual(@as(u64, 384 * 1024), progress.done_bytes);
     try std.testing.expectEqual(progress.done_bytes, progress.total_bytes);
-    try std.testing.expectEqual(width, progress.barWidth(80));
+    try std.testing.expectEqual(width, progress.layout(80).bar_width);
 }
 
-test "progress reserves the complete count field from its total" {
+test "progress reserves count growth without padding the displayed counts" {
     var sink: std.Io.Writer.Discarding = .init(&.{});
     var progress: Progress = .{ .io = std.testing.io, .writer = &sink.writer, .label = "Comparing", .label_columns = 17, .total_files = 19827 };
-    try std.testing.expectEqual(@as(usize, 25), progress.barWidth(120));
-    try std.testing.expectEqual(@as(usize, 16), progress.barWidth(60));
-    try std.testing.expectEqual(@as(usize, 10), progress.barWidth(40));
-    for ([_]usize{ 0, 10000, 19827 }) |count| {
+    try std.testing.expectEqual(@as(usize, 25), progress.layout(120).bar_width);
+    try std.testing.expectEqual(@as(usize, 16), progress.layout(60).bar_width);
+    try std.testing.expectEqual(@as(usize, 15), progress.layout(40).bar_width);
+    for ([_]usize{ 0, 9, 10, 99, 100, 999, 1000, 10000, 19827 }) |count| {
         var buffer: [160]u8 = undefined;
         var output: std.Io.Writer = .fixed(&buffer);
         progress.writer = &output;
         progress.done_files = count;
-        try progress.writeLine(false, 0, null, progress.barWidth(60), .no_color);
+        try progress.writeLine(false, 0, null, progress.layout(60), .no_color);
         const field = output.buffered()[(std.mem.indexOf(u8, output.buffered(), "files ").? + "files ".len)..];
-        try std.testing.expectEqual(@as(usize, 11), field.len);
-        try std.testing.expect(std.mem.endsWith(u8, field, "/19827"));
-        try std.testing.expectEqual(@as(usize, 16), progress.barWidth(60));
-        if (count == 0) try std.testing.expectEqualStrings("    0/19827", field);
+        var expected: [32]u8 = undefined;
+        try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "{d}/19827", .{count}), field);
+        try std.testing.expectEqual(@as(usize, 16), progress.layout(60).bar_width);
     }
 }
 
@@ -1235,17 +1262,56 @@ test "progress reserves byte unit boundaries and speed without counter-dependent
     var progress: Progress = .{ .io = std.testing.io, .writer = &sink.writer, .label = "Reading targets", .total_bytes = 1024 * 1024, .show_speed = true };
     try std.testing.expectEqual(@as(usize, 11), byteColumns(progress.total_bytes).current);
     try std.testing.expectEqual(@as(usize, 8), byteColumns(progress.total_bytes).total);
-    const width = progress.barWidth(80);
+    const width = progress.layout(80).bar_width;
     for ([_]u64{ 0, 1023, 1024 * 1024 - 1, 1024 * 1024 }) |count| {
         var buffer: [160]u8 = undefined;
         var output: std.Io.Writer = .fixed(&buffer);
         progress.writer = &output;
         progress.done_bytes = count;
         progress.activity_bytes = count;
-        try progress.writeLine(false, 0, null, width, .no_color);
-        try std.testing.expectEqual(width, progress.barWidth(80));
+        try progress.writeLine(false, 0, null, progress.layout(80), .no_color);
+        try std.testing.expectEqual(width, progress.layout(80).bar_width);
         const slash = std.mem.indexOfScalar(u8, output.buffered(), '/').?;
         try std.testing.expectEqualStrings("1.00 MiB", output.buffered()[slash + 1 .. slash + 9]);
+    }
+}
+
+test "narrow progress rows retain whole measurements as counters grow" {
+    var buffer: [256]u8 = undefined;
+    var output: std.Io.Writer = .fixed(&buffer);
+    var progress: Progress = .{
+        .io = std.testing.io,
+        .writer = &output,
+        .label = "Reading contents",
+        .total_bytes = 16 * 1024 * 1024,
+        .byte_columns = .{ .current = 11, .total = 11 },
+        .show_speed = true,
+        .item_label = null,
+    };
+    for ([_]usize{ 40, 60, 80, 120 }) |columns| {
+        var bar_end: ?usize = null;
+        for ([_]u64{ 0, 9, 99, 999, 1023, 1024, 1024 * 1024 - 1, 1024 * 1024, 16 * 1024 * 1024 }) |count| {
+            output = .fixed(&buffer);
+            progress.done_bytes = count;
+            progress.activity_bytes = count;
+            try progress.writeLine(false, 0, null, progress.layout(columns), .no_color);
+            const line = output.buffered();
+            try std.testing.expect(line.len < columns);
+            const end = std.mem.indexOfScalar(u8, line, ']').?;
+            if (bar_end) |previous_end| try std.testing.expectEqual(previous_end, end);
+            bar_end = end;
+            const stats = line[end + 1 ..];
+            try std.testing.expect(std.mem.indexOf(u8, stats, "   ") == null);
+            if (columns == 40) {
+                try std.testing.expect(std.mem.endsWith(u8, stats, "%"));
+            } else {
+                var count_buffer: [64]u8 = undefined;
+                var expected: [128]u8 = undefined;
+                const measurement = try std.fmt.bufPrint(&expected, "{s}/16.00 MiB", .{try bytes(&count_buffer, count)});
+                try std.testing.expect(std.mem.indexOf(u8, stats, measurement) != null);
+                try std.testing.expect(std.mem.endsWith(u8, stats, if (columns >= 80 and count != 0) "0 B/s" else "16.00 MiB"));
+            }
+        }
     }
 }
 
