@@ -292,10 +292,11 @@ fn reportZiffApplyError(
 
 fn reportDeltaReadError(out: *std.Io.Writer, delta_path: []const u8, err: anyerror) anyerror {
     switch (err) {
-        error.FileNotFound, error.AccessDenied, error.NotDir, error.IsDir, error.ContainerChangedDuringClassification => {
+        error.FileNotFound, error.AccessDenied, error.PermissionDenied, error.FileBusy, error.NotDir, error.IsDir, error.ContainerChangedDuringClassification => {
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" cannot read delta file\n") catch return err;
             ui.writeField(out, "File:", delta_path) catch return err;
+            ui.writeField(out, "Reason:", @errorName(err)) catch return err;
             return error.Reported;
         },
         else => return err,

@@ -880,11 +880,6 @@ pub const Commit = struct {
         self.closePublishedGuards();
     }
 
-    pub fn rollbackOr(self: *Commit, original_error: anyerror) anyerror {
-        self.rollback() catch |err| return err;
-        return original_error;
-    }
-
     pub fn finish(self: *Commit) !void {
         for (self.outputs) |output| {
             const publication = switch (output.state) {

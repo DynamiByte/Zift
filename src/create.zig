@@ -416,9 +416,15 @@ fn compareSides(
     errdefer comparing.abort();
 
     if (software == null) {
-        source_tree = try tree.inventory(allocator, io, source.path, null, ignore);
+        source_tree = tree.inventory(allocator, io, source.path, null, ignore) catch |err| {
+            comparing.abort();
+            return reportScanError(out, "Source", source.path, err);
+        };
         try comparing.pulse();
-        target_tree = try tree.inventory(allocator, io, target.path, null, ignore);
+        target_tree = tree.inventory(allocator, io, target.path, null, ignore) catch |err| {
+            comparing.abort();
+            return reportScanError(out, "Target", target.path, err);
+        };
     } else if (source_fast and target_fast) {
         source_tree = try tree.fromExpectedWithMetadata(
             allocator,
@@ -827,10 +833,13 @@ fn reportCreateError(out: *std.Io.Writer, source: []const u8, target: []const u8
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" Target changed while creating delta\n") catch return err;
             ui.writeField(out, "Target:", target) catch return err;
-            return error.Reported;
         },
         error.FileNotFound,
         error.AccessDenied,
+        error.PermissionDenied,
+        error.FileBusy,
+        error.NotDir,
+        error.IsDir,
         error.ReadOnlyFileSystem,
         error.NoSpaceLeft,
         error.DiskQuota,
@@ -853,10 +862,11 @@ fn reportCreateError(out: *std.Io.Writer, source: []const u8, target: []const u8
             ui.writeField(out, "Source:", source) catch return err;
             ui.writeField(out, "Target:", target) catch return err;
             ui.writeField(out, "Output:", output) catch return err;
-            return error.Reported;
         },
         else => return err,
     }
+    ui.writeField(out, "Reason:", @errorName(err)) catch return err;
+    return error.Reported;
 }
 
 fn reportScanError(out: *std.Io.Writer, side: []const u8, directory: []const u8, err: anyerror) anyerror {
@@ -865,19 +875,16 @@ fn reportScanError(out: *std.Io.Writer, side: []const u8, directory: []const u8,
             ui.writeErrorPrefix(out) catch return err;
             out.print(" unsupported file type in {s}\n", .{side}) catch return err;
             ui.writeField(out, "Directory:", directory) catch return err;
-            return error.Reported;
         },
         error.UnsafePath, error.PathTooLongForZip, error.DuplicatePath => {
             ui.writeErrorPrefix(out) catch return err;
             out.print(" unsupported path in {s}\n", .{side}) catch return err;
             ui.writeField(out, "Directory:", directory) catch return err;
-            return error.Reported;
         },
-        error.AccessDenied, error.FileNotFound, error.NotDir => {
+        error.AccessDenied, error.PermissionDenied, error.FileBusy, error.FileNotFound, error.NotDir => {
             ui.writeErrorPrefix(out) catch return err;
             out.print(" cannot read {s}\n", .{side}) catch return err;
             ui.writeField(out, "Directory:", directory) catch return err;
-            return error.Reported;
         },
         error.AuthoritativeClaimMissing,
         error.AuthoritativeClaimUnavailable,
@@ -887,10 +894,11 @@ fn reportScanError(out: *std.Io.Writer, side: []const u8, directory: []const u8,
             try ui.writeErrorPrefix(out);
             try out.print(" {s} files do not match the manifest\n", .{side});
             try ui.writeField(out, "Directory:", directory);
-            return error.Reported;
         },
         else => return err,
     }
+    ui.writeField(out, "Reason:", @errorName(err)) catch return err;
+    return error.Reported;
 }
 
 fn reportCompareError(out: *std.Io.Writer, source: []const u8, target: []const u8, err: anyerror) anyerror {
@@ -900,10 +908,11 @@ fn reportCompareError(out: *std.Io.Writer, source: []const u8, target: []const u
             out.writeAll(" Source or Target changed while comparing\n") catch return err;
             ui.writeField(out, "Source:", source) catch return err;
             ui.writeField(out, "Target:", target) catch return err;
-            return error.Reported;
         },
         else => return err,
     }
+    ui.writeField(out, "Reason:", @errorName(err)) catch return err;
+    return error.Reported;
 }
 
 fn requireNamePart(out: *std.Io.Writer, label: []const u8, value: []const u8) !void {

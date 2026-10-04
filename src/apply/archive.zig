@@ -2144,21 +2144,18 @@ fn reportApplyError(out: *std.Io.Writer, delta_path: []const u8, directory_path:
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" invalid or unsupported delta file\n") catch return err;
             ui.writeField(out, "File:", delta_path) catch return err;
-            return error.Reported;
         },
         error.HDiffApplyFailed => {
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" could not reconstruct the target\n") catch return err;
             ui.writeField(out, "File:", delta_path) catch return err;
             ui.writeField(out, "Directory:", directory_path) catch return err;
-            return error.Reported;
         },
         error.SourcePathConflict => {
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" source does not match this delta\n") catch return err;
             ui.writeField(out, "File:", delta_path) catch return err;
             ui.writeField(out, "Directory:", directory_path) catch return err;
-            return error.Reported;
         },
         error.SizeMismatch,
         error.Md5Mismatch,
@@ -2173,34 +2170,31 @@ fn reportApplyError(out: *std.Io.Writer, delta_path: []const u8, directory_path:
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" staged target failed verification\n") catch return err;
             ui.writeField(out, "File:", delta_path) catch return err;
-            return error.Reported;
         },
-        error.AccessDenied, error.ReadOnlyFileSystem => {
+        error.AccessDenied, error.PermissionDenied, error.ReadOnlyFileSystem, error.FileBusy, error.FileNotFound, error.NotDir, error.IsDir => {
             ui.writeErrorPrefix(out) catch return err;
-            out.writeAll(" cannot modify destination directory\n") catch return err;
+            out.writeAll(" cannot apply delta\n") catch return err;
             ui.writeField(out, "Directory:", directory_path) catch return err;
-            return error.Reported;
         },
         error.NoSpaceLeft, error.DiskQuota => {
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" not enough disk space to apply delta\n") catch return err;
             ui.writeField(out, "Directory:", directory_path) catch return err;
-            return error.Reported;
         },
         error.RollbackConflict => {
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" rollback failed\nInspect the destination and recovery files before retrying.\n") catch return err;
             ui.writeField(out, "Directory:", directory_path) catch return err;
-            return error.Reported;
         },
         error.PublicationOutcomeUnknown => {
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" could not confirm file replacement\nVerify the destination before retrying.\n") catch return err;
             ui.writeField(out, "Directory:", directory_path) catch return err;
-            return error.Reported;
         },
         else => return err,
     }
+    ui.writeField(out, "Reason:", @errorName(err)) catch return err;
+    return error.Reported;
 }
 
 fn reportInspectionError(out: *std.Io.Writer, delta_path: []const u8, err: anyerror) anyerror {
@@ -2215,7 +2209,6 @@ fn reportInspectionError(out: *std.Io.Writer, delta_path: []const u8, err: anyer
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" cannot read delta file\n") catch return err;
             ui.writeField(out, "File:", delta_path) catch return err;
-            return error.Reported;
         },
         error.InvalidDeltaLayout,
         error.UnsupportedCompressionMethod,
@@ -2242,10 +2235,11 @@ fn reportInspectionError(out: *std.Io.Writer, delta_path: []const u8, err: anyer
             ui.writeErrorPrefix(out) catch return err;
             out.writeAll(" invalid or unsupported delta file\n") catch return err;
             ui.writeField(out, "File:", delta_path) catch return err;
-            return error.Reported;
         },
         else => return err,
     }
+    ui.writeField(out, "Reason:", @errorName(err)) catch return err;
+    return error.Reported;
 }
 
 fn validateDestinationPaths(
@@ -2340,8 +2334,16 @@ fn commitStage(
         mutations,
     );
     defer commit.deinit();
-    commitStageChanges(io, stage, removals, out, &commit) catch |err| return commit.rollbackOr(err);
-    commit.finish() catch |err| return commit.rollbackOr(err);
+    commitStageChanges(io, stage, removals, out, &commit) catch |err| return rollbackStage(&commit, err, out);
+    commit.finish() catch |err| return rollbackStage(&commit, err, out);
+}
+
+fn rollbackStage(commit: *transaction.Commit, original_error: anyerror, out: *std.Io.Writer) anyerror {
+    commit.rollback() catch |rollback_error| {
+        ui.writeField(out, "Original error:", @errorName(original_error)) catch return rollback_error;
+        return rollback_error;
+    };
+    return original_error;
 }
 
 fn commitStageChanges(io: std.Io, stage: *Stage, removals: []const clean.Extra, out: *std.Io.Writer, commit: *transaction.Commit) !void {
