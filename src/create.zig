@@ -161,18 +161,6 @@ pub fn run(
         source = withoutIntegration(source);
         target = withoutIntegration(target);
     }
-    var selected_method = choices.method;
-    if (choices.format != null) {
-        const method = selected_method orelse cli.MethodChoice.defaults(if (automatic_enabled)
-            .ziff
-        else
-            try cli.promptMethod(allocator, io, out, .ziff));
-        if (std.meta.activeTag(method) == .ziff) {
-            try cli.printProblem(out, .format_not_applicable);
-            return error.Reported;
-        }
-        selected_method = method;
-    }
     var comparison = try compareSides(allocator, io, source, &target, software, out);
     defer allocator.free(comparison.failures);
     defer allocator.free(comparison.source_failures);
@@ -221,6 +209,19 @@ pub fn run(
         try ui.writeSuccessLine(out, "No differences found.");
         if (had_errors) try ui.complete(out, true);
         return;
+    }
+
+    var selected_method = choices.method;
+    if (choices.format != null) {
+        const method = selected_method orelse cli.MethodChoice.defaults(if (automatic_enabled)
+            .ziff
+        else
+            try cli.promptMethod(allocator, io, out, .ziff));
+        if (std.meta.activeTag(method) == .ziff) {
+            try cli.printProblem(out, .format_not_applicable);
+            return error.Reported;
+        }
+        selected_method = method;
     }
 
     const prefix_default = if (software) |value| integrations.defaultPrefix(value) else null;
@@ -1193,7 +1194,11 @@ test "identical generic directories finish without creation prompts" {
     const target = try std.fs.path.join(allocator, &.{ root, "target" });
     const output_path = try std.fs.path.join(allocator, &.{ root, "unused.ziff" });
     var output: std.Io.Writer.Allocating = .init(allocator);
-    try run(allocator, io, source, target, output_path, .{}, false, false, false, &output.writer);
+    for ([_]cli.CreateChoices{ .{}, .{ .format = .defaults(.tar_zstd) } }) |choices| {
+        output.clearRetainingCapacity();
+        try run(allocator, io, source, target, output_path, choices, false, false, false, &output.writer);
+        try std.testing.expect(std.mem.indexOf(u8, output.written(), "No differences found.") != null);
+    }
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "No differences found.") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "Prefix") == null);
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(io, "unused.ziff", .{}));
