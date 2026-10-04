@@ -99,7 +99,7 @@ pub fn main(init: std.process.Init) !u8 {
     switch (parsed.operation) {
         .clean => |op| clean.run(arena, init.io, op.directory, op.complete, parsed.assume_yes, parsed.verify_md5, stdout) catch |err|
             return operationError(stdout, stderr, err),
-        .make => |op| create.run(arena, init.io, op.source, op.target, op.out, op.choices, parsed.assume_yes, parsed.automatic, parsed.minimum_memory, stdout) catch |err|
+        .make => |op| create.run(arena, init.io, op.source, op.target, op.out, op.choices, parsed.assume_yes, parsed.automatic, parsed.minimum_memory, parsed.force, stdout) catch |err|
             return operationError(stdout, stderr, err),
         .apply => |op| apply.run(arena, init.io, op.delta, op.directory, parsed.assume_yes, parsed.verify_md5, parsed.force, stdout) catch |err|
             return operationError(stdout, stderr, err),

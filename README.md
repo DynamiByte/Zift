@@ -26,7 +26,7 @@ Optional integrations: Zenless Zone Zero, Genshin Impact, Arknights: Endfield, a
 - `-m` Reduce matching memory. Creation may take longer.
 - `-y` Skip the final confirmation.
 - `-v` Verify finished file hashes. Takes more time.
-- `-f` Apply despite low disk space or a Ziff software/source-version mismatch.
+- `-f` Force even if issues arise, such as source/target issues, low disk space, or software/source-version mismatches.
 - `-h`, `--help` Show usage.
 
 Creation choices:
@@ -36,7 +36,6 @@ Creation choices:
 - `--source-version text`, `--target-version text` Set the version names.
 - `--method ziff|hdiff[:w26|h13|sf20]|file` Default: Ziff. HDiff defaults to W26. Also accepts `1|2|3`.
 - `--format zip-store|zip-deflate[:N]|tar-zstd[:N]` File Delta/HDiff only. Deflate: `1`–`9` (default `1`). Zstd: `1`–`22` (default `3`).
-- `--continue-on-errors y|n` Continue or abort on reported source/target issues.
 - `--correct-target-manifest y|n` Correct reported target entries in the delta.
 
 Explicit choices override `-a`. Without `-a`, omitted choices prompt. `-a` and `-y` do not approve content issues or Ziff compatibility mismatches. `-f` leaves content integrity checks enabled.

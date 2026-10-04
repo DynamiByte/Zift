@@ -131,6 +131,7 @@ pub fn run(
     assume_yes: bool,
     automatic: bool,
     minimum_memory: bool,
+    force: bool,
     out: *std.Io.Writer,
 ) !void {
     var source = inspectSide(io, source_path) catch |err| return reportScanError(out, "Source", source_path, err);
@@ -184,9 +185,7 @@ pub fn run(
         if (source_issues) try ui.writeWarningLine(out, "Delta may not apply to a clean source installation.");
         if (target_issues) try ui.writeWarningLine(out, "Unavailable target files will be omitted.");
         try out.writeByte('\n');
-        const continue_anyway = choices.continue_on_errors orelse
-            try cli.promptYesNo(allocator, io, out, "Create delta anyway?", false);
-        if (!continue_anyway) return error.Aborted;
+        if (!force and !try cli.promptYesNo(allocator, io, out, "Create delta anyway?", false)) return error.Aborted;
         const can_correct_target = target_issues and target.state.?.manifest_format == .pkg_version_ndjson;
         if (target_issues and !can_correct_target and choices.correct_target_manifest == true) {
             try ui.writeErrorPrefix(out);
@@ -1178,6 +1177,46 @@ test "one unavailable managed view downgrades both sides to literal generic" {
     try std.testing.expect((if (result.software) |value| integrations.ignoreFilter(value) else null) == null);
 }
 
+test "force creates a delta despite reported source issues" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for ([_][]const u8{ "source", "target" }) |side| {
+        try tmp.dir.createDir(io, side, .default_dir);
+        var dir = try tmp.dir.openDir(io, side, .{});
+        defer dir.close(io);
+        const is_source = std.mem.eql(u8, side, "source");
+        const data = if (is_source) "old" else "new";
+        try dir.writeFile(io, .{ .sub_path = "ZenlessZoneZero.exe", .data = "" });
+        try dir.writeFile(io, .{ .sub_path = "payload", .data = data });
+        var md5: [16]u8 = undefined;
+        std.crypto.hash.Md5.hash(data, &md5, .{});
+        const metadata = try std.fmt.allocPrint(
+            allocator,
+            "{{\"remoteName\":\"payload\",\"fileSize\":{d},\"md5\":\"{x}\"}}\n",
+            .{ @as(usize, if (is_source) 4 else data.len), md5 },
+        );
+        try dir.writeFile(io, .{ .sub_path = "pkg_version", .data = metadata });
+    }
+    const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    const source = try std.fs.path.join(allocator, &.{ root, "source" });
+    const target = try std.fs.path.join(allocator, &.{ root, "target" });
+    const output_path = try std.fs.path.join(allocator, &.{ root, "forced.zip" });
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    try std.testing.expectError(error.CompletedWithErrors, run(allocator, io, source, target, output_path, .{
+        .source_version = "1",
+        .target_version = "2",
+        .method = .defaults(.file_delta),
+        .format = .defaults(.zip_store),
+    }, true, true, false, true, &output.writer));
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Source issues:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Create delta anyway?") == null);
+    try std.testing.expect((try tmp.dir.statFile(io, "forced.zip", .{})).size > 0);
+}
+
 test "identical generic directories finish without creation prompts" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1196,7 +1235,7 @@ test "identical generic directories finish without creation prompts" {
     var output: std.Io.Writer.Allocating = .init(allocator);
     for ([_]cli.CreateChoices{ .{}, .{ .format = .defaults(.tar_zstd) } }) |choices| {
         output.clearRetainingCapacity();
-        try run(allocator, io, source, target, output_path, choices, false, false, false, &output.writer);
+        try run(allocator, io, source, target, output_path, choices, false, false, false, false, &output.writer);
         try std.testing.expect(std.mem.indexOf(u8, output.written(), "No differences found.") != null);
     }
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "No differences found.") != null);

@@ -89,14 +89,13 @@ pub const CreateChoices = struct {
     target_version: ?[]const u8 = null,
     method: ?MethodChoice = null,
     format: ?FormatChoice = null,
-    continue_on_errors: ?bool = null,
     correct_target_manifest: ?bool = null,
 
     fn specified(self: CreateChoices) bool {
         return self.integration != null or self.prefix != null or
             self.source_version != null or self.target_version != null or
             self.method != null or self.format != null or
-            self.continue_on_errors != null or self.correct_target_manifest != null;
+            self.correct_target_manifest != null;
     }
 };
 
@@ -148,7 +147,6 @@ const ValueOption = enum {
     target_version,
     method,
     format,
-    continue_on_errors,
     correct_target_manifest,
 };
 
@@ -159,7 +157,6 @@ const value_options = std.StaticStringMap(ValueOption).initComptime(.{
     .{ "--target-version", .target_version },
     .{ "--method", .method },
     .{ "--format", .format },
-    .{ "--continue-on-errors", .continue_on_errors },
     .{ "--correct-target-manifest", .correct_target_manifest },
 });
 
@@ -310,11 +307,10 @@ fn resolved(options: Parsed, choices: CreateChoices, operation: Operation) Parse
 
 fn setChoice(allocator: std.mem.Allocator, choices: *CreateChoices, option: ValueOption, name: []const u8, value: []const u8) !?Problem {
     switch (option) {
-        .integration, .continue_on_errors, .correct_target_manifest => {
+        .integration, .correct_target_manifest => {
             const enabled = parseYesNo(value) orelse return invalidValue(allocator, name, value);
             switch (option) {
                 .integration => choices.integration = enabled,
-                .continue_on_errors => choices.continue_on_errors = enabled,
                 .correct_target_manifest => choices.correct_target_manifest = enabled,
                 else => unreachable,
             }
@@ -653,7 +649,8 @@ pub fn printUsage(w: *std.Io.Writer) !void {
         \\  -a  Use detected values and defaults
         \\  -c  Complete Clean
         \\  -m  Reduce matching memory. Creation may take longer.
-        \\  -f  Apply despite low space or a Ziff software/source-version mismatch
+        \\  -f  Force even if issues arise, such as source/target issues, low disk space,
+        \\      or software/source-version mismatches.
         \\  -y  Skip final confirmation
         \\  -v  Verify finished file hashes. Takes more time.
         \\  -h, --help  Show usage
@@ -666,7 +663,6 @@ pub fn printUsage(w: *std.Io.Writer) !void {
         \\  --method ziff|hdiff[:w26|h13|sf20]|file  Or 1|2|3 (default 1)
         \\  --format zip-store|zip-deflate[:N]|tar-zstd[:N]
         \\    Deflate: 1..9 (default 1). Zstd: 1..22 (default 3).
-        \\  --continue-on-errors y|n
         \\  --correct-target-manifest y|n  Correct reported entries in the delta
         \\  Unspecified choices prompt without -a.
         \\
@@ -706,7 +702,7 @@ test "choice options reject invalid values and inapplicable operations" {
         .{ "zift --method wrong", &.{ "zift", "--method", "wrong" }, "Error: invalid value for --method: wrong\n" },
         .{ "zift --integration maybe", &.{ "zift", "--integration", "maybe" }, "Error: invalid value for --integration: maybe\n" },
         .{ "zift --integration yes", &.{ "zift", "--integration", "yes" }, "Error: invalid value for --integration: yes\n" },
-        .{ "zift --continue-on-errors no", &.{ "zift", "--continue-on-errors", "no" }, "Error: invalid value for --continue-on-errors: no\n" },
+        .{ "zift --continue-on-errors y", &.{ "zift", "--continue-on-errors", "y" }, "Error: unknown option: --continue-on-errors\n" },
         .{ "zift --correct-target-manifest true", &.{ "zift", "--correct-target-manifest", "true" }, "Error: invalid value for --correct-target-manifest: true\n" },
         .{ "zift --hdiff-format", &.{ "zift", "--hdiff-format" }, "Error: unknown option: --hdiff-format\n" },
         .{ "zift --zstd-level", &.{ "zift", "--zstd-level" }, "Error: unknown option: --zstd-level\n" },
@@ -755,11 +751,11 @@ test "creation choices preserve explicit values and positional ordering" {
     var environ = std.process.Environ.Map.init(allocator);
     defer environ.deinit();
     const args: std.process.Args = if (@import("builtin").target.os.tag == .windows)
-        .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral("zift --integration Y . --prefix n --source-version version-one --target-version version-two --method hdiff:HDIFF13 --format tar-zstd:22 --continue-on-errors y --correct-target-manifest N -a -y choice.tar.zst ..") }
+        .{ .vector = std.unicode.utf8ToUtf16LeStringLiteral("zift --integration Y . --prefix n --source-version version-one --target-version version-two --method hdiff:HDIFF13 --format tar-zstd:22 -f --correct-target-manifest N -a -y choice.tar.zst ..") }
     else
-        .{ .vector = &.{ "zift", "--integration", "Y", ".", "--prefix", "n", "--source-version", "version-one", "--target-version", "version-two", "--method", "hdiff:HDIFF13", "--format", "tar-zstd:22", "--continue-on-errors", "y", "--correct-target-manifest", "N", "-a", "-y", "choice.tar.zst", ".." } };
+        .{ .vector = &.{ "zift", "--integration", "Y", ".", "--prefix", "n", "--source-version", "version-one", "--target-version", "version-two", "--method", "hdiff:HDIFF13", "--format", "tar-zstd:22", "-f", "--correct-target-manifest", "N", "-a", "-y", "choice.tar.zst", ".." } };
     const result = try parse(allocator, std.testing.io, args, &environ);
-    try std.testing.expect(result.ok.automatic and result.ok.assume_yes);
+    try std.testing.expect(result.ok.automatic and result.ok.assume_yes and result.ok.force);
     const make = result.ok.operation.make;
     try std.testing.expectEqualStrings(".", make.source);
     try std.testing.expectEqualStrings("..", make.target);
@@ -772,7 +768,6 @@ test "creation choices preserve explicit values and positional ordering" {
     try std.testing.expectEqual(ArchiveFormat.tar_zstd, std.meta.activeTag(make.choices.format.?));
     try std.testing.expectEqual(HDiffFormat.h13, make.choices.method.?.hdiff);
     try std.testing.expectEqual(@as(c_int, 22), make.choices.format.?.tar_zstd);
-    try std.testing.expectEqual(true, make.choices.continue_on_errors.?);
     try std.testing.expectEqual(false, make.choices.correct_target_manifest.?);
 
     inline for (.{ .{ "1", Method.ziff }, .{ "2", Method.hdiff }, .{ "3", Method.file_delta } }) |case| {
