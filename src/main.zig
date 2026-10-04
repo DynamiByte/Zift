@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const cli = @import("cli.zig");
+const console = @import("console.zig");
 const clean = @import("clean.zig");
 const interrupt = @import("interrupt.zig");
 const profile = @import("profile.zig");
@@ -62,6 +63,8 @@ pub fn main(init: std.process.Init) !u8 {
     var stderr_writer = stderr_file.writer(init.io, &stderr_buf);
     const stdout = &stdout_writer.interface;
     const stderr = &stderr_writer.interface;
+    const console_encoding = console.OutputEncoding.init(stdout_file, stderr_file) catch |err| return operationError(stdout, stderr, err);
+    defer console_encoding.deinit();
     const no_color = if (init.environ_map.get("NO_COLOR")) |value| value.len != 0 else false;
     ui.initStream(init.io, stdout_file, stdout, no_color);
     ui.initStream(init.io, stderr_file, stderr, no_color);

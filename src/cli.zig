@@ -6,6 +6,7 @@ const ArchiveFormat = @import("archive.zig").Format;
 const HDiffFormat = @import("hdiff.zig").Format;
 const ui = @import("ui.zig");
 const interrupt = @import("interrupt.zig");
+const console = @import("console.zig");
 const zstd_c = @import("compression/zstd_c.zig");
 
 pub const MethodChoice = union(Method) {
@@ -553,16 +554,24 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io) !?[]const u8 {
     var stdin_file = std.Io.File.stdin();
     var one: [1]u8 = undefined;
     var reader = stdin_file.readerStreaming(io, &one);
+    const native_console = console.isNative(stdin_file);
     while (true) {
-        const ch = (try readPromptByte(&reader)) orelse if (len == 0 and !too_long) return null else break;
-        if (ch == '\n') break;
+        var bytes: [4]u8 = undefined;
+        const count = if (builtin.os.tag == .windows and native_console) blk: {
+            const ch = (try console.readChar(stdin_file)) orelse if (len == 0 and !too_long) return null else break;
+            break :blk try std.unicode.utf8Encode(ch, &bytes);
+        } else blk: {
+            bytes[0] = (try readPromptByte(&reader)) orelse if (len == 0 and !too_long) return null else break;
+            break :blk 1;
+        };
+        if (count == 1 and bytes[0] == '\n') break;
         if (too_long) continue;
-        if (len == input.len) {
+        if (count > input.len - len) {
             too_long = true;
             continue;
         }
-        input[len] = ch;
-        len += 1;
+        @memcpy(input[len..][0..count], bytes[0..count]);
+        len += count;
     }
     if (too_long) return error.InputTooLong;
     const line = try allocator.dupe(u8, std.mem.trim(u8, input[0..len], " \t\r"));
