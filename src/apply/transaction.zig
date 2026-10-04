@@ -1162,7 +1162,8 @@ pub const Commit = struct {
                     errdefer if (new_authority) |authority| authority.close(self.io);
                     var expected_identity: ?fs.ObjectIdentity = null;
                     if (builtin.target.os.tag == .windows) {
-                        expected_identity = self.retainedDirectoryIdentity(prefix) orelse
+                        expected_identity = self.createdDirectoryIdentity(prefix) orelse
+                            self.retainedDirectoryIdentity(prefix) orelse
                             try self.capturedDirectoryIdentity(prefix);
                         if (expected_identity == null) {
                             try self.retained_directories.ensureUnusedCapacity(self.allocator, 1);
@@ -1224,6 +1225,15 @@ pub const Commit = struct {
             current_owned = !created or builtin.target.os.tag != .windows;
             start = end + 1;
         }
+    }
+
+    fn createdDirectoryIdentity(self: *const Commit, path: []const u8) ?fs.ObjectIdentity {
+        for (self.created_directories.items) |created| {
+            if (!path_util.WindowsCaseContext.eql(.{}, created.path, path)) continue;
+            if (created.handle == null) return null;
+            return created.identity;
+        }
+        return null;
     }
 
     fn retainedDirectoryIdentity(self: *const Commit, path: []const u8) ?fs.ObjectIdentity {
@@ -2549,28 +2559,33 @@ test "commit parent tracking reuses target paths through finish and rollback" {
 
         const target_path = try std.testing.allocator.dupe(u8, "existing/new/deep/payload.bin");
         defer std.testing.allocator.free(target_path);
+        const sibling_path = "existing/new/deep/sibling.bin";
         const staged = try fs.createGuardedOutputBeneath(io, tmp.dir, ".zift-work/staged/payload.bin");
         try staged.writePositionalAll(io, "payload", 0);
-        var outputs = [_]Output{.{
-            .path = target_path,
-            .work_rel = ".zift-work/staged/payload.bin",
-            .size = 7,
-            .state = .{ .staged = staged },
-        }};
+        const sibling = try fs.createGuardedOutputBeneath(io, tmp.dir, ".zift-work/staged/sibling.bin");
+        try sibling.writePositionalAll(io, "sibling", 0);
+        var outputs = [_]Output{
+            .{ .path = target_path, .work_rel = ".zift-work/staged/payload.bin", .size = 7, .state = .{ .staged = staged } },
+            .{ .path = sibling_path, .work_rel = ".zift-work/staged/sibling.bin", .size = 7, .state = .{ .staged = sibling } },
+        };
 
         var allocator_state = std.testing.FailingAllocator.init(std.testing.allocator, .{});
         const allocator = allocator_state.allocator();
-        var commit = try testingCommit(allocator, io, tmp.dir, &workspace, &.{target_path}, &.{}, &outputs);
+        var commit = try testingCommit(allocator, io, tmp.dir, &workspace, &.{ target_path, sibling_path }, &.{}, &outputs);
         defer commit.deinit();
         try commit.created_directories.ensureUnusedCapacity(allocator, 3);
         allocator_state.fail_index = allocator_state.alloc_index;
         try commit.publish(0);
         try std.testing.expect(!allocator_state.has_induced_failure);
         allocator_state.fail_index = std.math.maxInt(usize);
+        try commit.publish(1);
 
         const published = try tmp.dir.readFileAlloc(io, target_path, std.testing.allocator, .limited(8));
         defer std.testing.allocator.free(published);
         try std.testing.expectEqualStrings("payload", published);
+        const published_sibling = try tmp.dir.readFileAlloc(io, sibling_path, std.testing.allocator, .limited(8));
+        defer std.testing.allocator.free(published_sibling);
+        try std.testing.expectEqualStrings("sibling", published_sibling);
         if (builtin.target.os.tag == .windows) {
             if (tmp.dir.rename("existing/new", tmp.dir, "existing/moved", io)) |_| {
                 return error.TestUnexpectedResult;
