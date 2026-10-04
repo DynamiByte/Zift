@@ -189,6 +189,14 @@ fn authoritativeTargetMd5(package: ?PackageState, path: []const u8) ?[16]u8 {
     return expected.md5;
 }
 
+fn standardHashVerification(package: ?PackageState, requested: bool, out: *std.Io.Writer) !bool {
+    if (!requested) return false;
+    if (package) |value| if (value.state.digest_authority == .authoritative) return true;
+    try ui.writeWarningLine(out, "Hashes are unavailable; continuing without hash verification.");
+    try out.flush();
+    return false;
+}
+
 fn rejectPrimaryManifestDirectory(software: integrations.Software, path: []const u8) !void {
     if (integrations.isPrimaryManifestPath(software, path)) return error.InvalidExpectedState;
 }
@@ -992,6 +1000,7 @@ fn applyStandardZip(
     const detected = integrations.detect(io, directory_path) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const identity = standardIdentityZip(allocator, io, directory_path, reader, archive, detected) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const package = packageStateZip(allocator, reader, archive, detected) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    const verify_hashes = try standardHashVerification(package, verify_md5, out);
     const target_paths = standardTargetPaths(allocator, archive.entries, controls) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const expected_entries: []const manifest_mod.File = if (package) |value| value.state.expected.entries else &.{};
     const path_layout = standardDestinationLayout(allocator, target_paths, controls.removals, expected_entries, builtin.target.os.tag == .windows) catch |err| return reportApplyError(out, delta_path, directory_path, err);
@@ -1021,7 +1030,7 @@ fn applyStandardZip(
     defer stage.discardGuards(io);
     var mutations = transaction.MutationSet.capture(allocator, io, preflight_directory, try stage.paths(allocator), stage.removals) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     defer mutations.deinit();
-    const had_errors = validateStandardStage(io, directory_path, &preflight_directory, &stage, package, verify_md5, out, counters) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    const had_errors = validateStandardStage(io, directory_path, &preflight_directory, &stage, package, verify_hashes, out, counters) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     mutations.validateBindings(preflight_directory) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     commitStage(allocator, io, &workspace, &preflight_directory, &stage, &mutations, out) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     try out.writeByte('\n');
@@ -1685,6 +1694,7 @@ fn applyStandardTar(
     };
     try checking.finish();
 
+    const verify_hashes = try standardHashVerification(scan.package, verify_md5, out);
     const target_paths = standardTargetPaths(allocator, scan.entries, scan.controls) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     const expected_entries: []const manifest_mod.File = if (scan.package) |value| value.state.expected.entries else &.{};
     const path_layout = standardDestinationLayout(allocator, target_paths, scan.controls.removals, expected_entries, builtin.target.os.tag == .windows) catch |err| return reportApplyError(out, delta_path, directory_path, err);
@@ -1713,7 +1723,7 @@ fn applyStandardTar(
     defer stage.discardGuards(io);
     var mutations = transaction.MutationSet.capture(allocator, io, preflight_directory, try stage.paths(allocator), stage.removals) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     defer mutations.deinit();
-    const had_errors = validateStandardStage(io, directory_path, &preflight_directory, &stage, scan.package, verify_md5, out, counters) catch |err| return reportApplyError(out, delta_path, directory_path, err);
+    const had_errors = validateStandardStage(io, directory_path, &preflight_directory, &stage, scan.package, verify_hashes, out, counters) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     mutations.validateBindings(preflight_directory) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     commitStage(allocator, io, &workspace, &preflight_directory, &stage, &mutations, out) catch |err| return reportApplyError(out, delta_path, directory_path, err);
     try out.writeByte('\n');
@@ -1988,12 +1998,6 @@ fn verifyGuardedStageTargetTwice(
 fn validateStandardStage(io: std.Io, directory_path: []const u8, directory: *std.Io.Dir, stage: *const Stage, package: ?PackageState, verify_md5: bool, out: *std.Io.Writer, counters: *integrity_run.Counters) !bool {
     var had_errors = false;
     const expected = if (package) |value| value.state else null;
-    if (verify_md5 and (expected == null or expected.?.digest_authority != .authoritative)) {
-        try ui.writeErrorPrefix(out);
-        try out.writeAll(" hash verification is unavailable for this delta\n");
-        return error.Reported;
-    }
-
     const scratch = std.heap.smp_allocator;
     const target_paths = try stage.paths(scratch);
     defer scratch.free(target_paths);
@@ -3291,6 +3295,59 @@ test "HDiff archives skip a missing source while publishing independent files an
         try tmp.dir.writeFile(io, .{ .sub_path = "a", .data = "abcd" });
         try apply(a, io, package_path, root, true, false, false, &output.writer);
         try std.testing.expectEqualStrings("abXd", try tmp.dir.readFileAlloc(io, "a", a, .limited(16)));
+    }
+}
+
+test "archive hash verification warns before staging only when hashes are unavailable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const warning = "Hashes are unavailable; continuing without hash verification.";
+    for ([_]@import("../archive.zig").Format{ .zip_store, .tar_zstd }) |format| {
+        for ([_]bool{ false, true }) |with_hashes| {
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            const root = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+            const package_path = try a.print("{s}/delta{s}", .{ root, format.extension() });
+            try tmp.dir.writeFile(io, .{ .sub_path = "keep", .data = "kept" });
+            if (with_hashes) try tmp.dir.writeFile(io, .{ .sub_path = "ZenlessZoneZero.exe", .data = "" });
+            {
+                var builder = try @import("../archive/writer.zig").Builder.init(a, io, root, package_path, format, .{});
+                defer builder.deinit();
+                try builder.add(.{ .path = "new", .size = 3, .data = .{ .bytes = "new" } }, null);
+                if (with_hashes) {
+                    var new_md5: [16]u8 = undefined;
+                    var keep_md5: [16]u8 = undefined;
+                    std.crypto.hash.Md5.hash("new", &new_md5, .{});
+                    std.crypto.hash.Md5.hash("kept", &keep_md5, .{});
+                    const metadata = try a.print(
+                        "{{\"remoteName\":\"new\",\"fileSize\":3,\"md5\":\"{x}\"}}\n" ++
+                            "{{\"remoteName\":\"keep\",\"fileSize\":4,\"md5\":\"{x}\"}}\n",
+                        .{ new_md5, keep_md5 },
+                    );
+                    try builder.add(.{ .path = "pkg_version", .size = metadata.len, .data = .{ .bytes = metadata } }, null);
+                }
+                try builder.finish();
+            }
+            var output: std.Io.Writer.Allocating = .init(a);
+            try apply(a, io, package_path, root, true, true, false, &output.writer);
+            try std.testing.expectEqualStrings("new", try tmp.dir.readFileAlloc(io, "new", a, .limited(16)));
+            const warning_at = std.mem.indexOf(u8, output.written(), warning);
+            if (with_hashes) {
+                try std.testing.expect(warning_at == null);
+                try tmp.dir.writeFile(io, .{ .sub_path = "keep", .data = "oops" });
+                try std.testing.expectError(error.CompletedWithErrors, apply(a, io, package_path, root, true, true, false, &output.writer));
+                try std.testing.expect(std.mem.indexOf(u8, output.written(), "Verifying: keep") != null);
+            } else {
+                try std.testing.expect(warning_at != null);
+                try std.testing.expect(warning_at.? < std.mem.indexOf(u8, output.written(), "Checking sources").?);
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.written(), warning));
+                output.clearRetainingCapacity();
+                try apply(a, io, package_path, root, true, false, false, &output.writer);
+                try std.testing.expect(std.mem.indexOf(u8, output.written(), warning) == null);
+            }
+        }
     }
 }
 
