@@ -434,13 +434,20 @@ pub fn openBackupAuthorityBeneathWindows(
     if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, sub_path);
     defer parent.close(io);
-    return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{
+    const directory = openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{
         .READ = true,
         .WRITE = true,
     }, true) catch |err| switch (err) {
-        error.NotDir => openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{ .READ = true }, false),
+        error.NotDir => return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{ .READ = true }, false),
         else => |other| return other,
     };
+    const stat = directory.stat(io) catch |err| {
+        directory.close(io);
+        return err;
+    };
+    if (stat.kind == .directory) return directory;
+    directory.close(io);
+    return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{ .READ = true }, false);
 }
 
 // mutation: content writes allowed, DELETE sharing denied
@@ -1879,6 +1886,43 @@ test "Windows-safe open requests synchronous non-alert I/O" {
     );
     try std.testing.expectEqual(windows.NTSTATUS.SUCCESS, status);
     try std.testing.expectEqual(@as(u2, 0b10), @backingInt(mode.IO));
+}
+
+test "Windows backup directory reparse points exclude writes" {
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(io, "target", .default_dir);
+    tmp.dir.symLink(io, "target", "link", .{ .is_directory = true }) catch |err| switch (err) {
+        error.AccessDenied, error.PermissionDenied => return error.SkipZigTest,
+        else => |other| return other,
+    };
+    const guard = try openBackupAuthorityBeneathWindows(io, tmp.dir, "link");
+    defer guard.close(io);
+    try std.testing.expectEqual(std.Io.File.Kind.sym_link, (try guard.stat(io)).kind);
+
+    const path = try std.Io.Threaded.sliceToPrefixedFileW(tmp.dir.handle, "link", .{});
+    var handle: windows.HANDLE = undefined;
+    var block: windows.IO_STATUS_BLOCK = undefined;
+    const status = windows.ntdll.NtCreateFile(
+        &handle,
+        .{ .SPECIFIC = .{ .FILE = .{ .WRITE_DATA = true } }, .STANDARD = .{ .SYNCHRONIZE = true } },
+        &.{ .RootDirectory = tmp.dir.handle, .ObjectName = @constCast(&windows.UNICODE_STRING.init(path.span())) },
+        &block,
+        null,
+        .{ .NORMAL = true },
+        .VALID_FLAGS,
+        .OPEN,
+        .{ .DIRECTORY_FILE = true, .IO = .SYNCHRONOUS_NONALERT, .OPEN_REPARSE_POINT = true, .OPEN_FOR_BACKUP_INTENT = true },
+        null,
+        0,
+    );
+    if (status == .SUCCESS) {
+        const writer: std.Io.File = .{ .handle = handle, .flags = .{ .nonblocking = false } };
+        writer.close(io);
+    }
+    try std.testing.expectEqual(windows.NTSTATUS.SHARING_VIOLATION, status);
 }
 
 test "Windows-safe open does not follow a final file reparse point" {
