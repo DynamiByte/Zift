@@ -208,7 +208,7 @@ pub fn create(
     creation.phase("Finalizing", 0, 0);
     try bundle.finish();
     creation.phase("Publishing", 0, 0);
-    try std.Io.Dir.cwd().renamePreserve(options.tmp_path, std.Io.Dir.cwd(), options.out_path, io);
+    try bundle.publish(options.tmp_path, options.out_path);
     creation.finish();
     try ui.printCreated(io, options.out_path, out);
 }

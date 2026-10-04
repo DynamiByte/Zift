@@ -208,6 +208,22 @@ pub const Builder = struct {
         try self.zstd.writer.flush();
         self.encoder.finish() catch return error.ZstdCompressFailed;
     }
+
+    pub fn publish(self: *Builder, staging_path: []const u8, final_path: []const u8) !void {
+        var staging_dir = try std.Io.Dir.cwd().openDir(self.io, std.fs.path.dirname(staging_path) orelse ".", .{});
+        defer staging_dir.close(self.io);
+        var final_dir = try std.Io.Dir.cwd().openDir(self.io, std.fs.path.dirname(final_path) orelse ".", .{});
+        defer final_dir.close(self.io);
+        try fs.publishConstructionOutput(
+            self.io,
+            staging_dir,
+            std.fs.path.basename(staging_path),
+            final_dir,
+            std.fs.path.basename(final_path),
+            self.encoder.file,
+            self.encoder.position,
+        );
+    }
 };
 
 const ZstdInput = struct {
@@ -505,6 +521,36 @@ pub const Stream = struct {
         self.iter.unread_file_bytes -= file.size;
     }
 };
+
+test "tar publication retains its output and preserves an existing destination" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "existing.tar.zst", .data = "sentinel" });
+    const root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    const staged_path = try std.fs.path.join(allocator, &.{ root, "delta.tar.zst.part" });
+    const existing_path = try std.fs.path.join(allocator, &.{ root, "existing.tar.zst" });
+    const final_path = try std.fs.path.join(allocator, &.{ root, "delta.tar.zst" });
+    const builder = try Builder.init(allocator, io, root, staged_path, 3);
+    defer builder.deinit();
+    try builder.add(.{ .path = "payload.bin", .size = 7, .data = .{ .bytes = "payload" } }, null);
+    try builder.finish();
+    try std.testing.expectError(error.PathAlreadyExists, builder.publish(staged_path, existing_path));
+    try std.testing.expectEqualStrings("sentinel", try tmp.dir.readFileAlloc(io, "existing.tar.zst", allocator, .limited(9)));
+    try builder.publish(staged_path, final_path);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, "delta.tar.zst.part", .{}));
+    var published = try fs.openRead(io, tmp.dir, "delta.tar.zst");
+    defer published.close(io);
+    try std.testing.expect(try fs.sameOpenFile(io, builder.encoder.file, published));
+    var stream = try Stream.initBorrowed(allocator, io, published, 0, try published.length(io));
+    defer stream.deinit();
+    const member = (try stream.next()).?;
+    try std.testing.expectEqualStrings("payload", try stream.readCurrentAlloc(allocator, member, 7));
+    try std.testing.expect((try stream.next()) == null);
+}
 
 test "BLAKE3 publication guard preserves tar bytes for every source kind" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

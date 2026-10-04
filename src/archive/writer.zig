@@ -54,6 +54,13 @@ pub const Builder = union(enum) {
         }
     }
 
+    pub fn publish(self: *Builder, staging_path: []const u8, final_path: []const u8) !void {
+        switch (self.*) {
+            .zip_builder => |builder| try std.Io.Dir.cwd().renamePreserve(staging_path, std.Io.Dir.cwd(), final_path, builder.io),
+            .tar_builder => |builder| try builder.publish(staging_path, final_path),
+        }
+    }
+
     pub fn deinit(self: *Builder) void {
         switch (self.*) {
             .zip_builder => |*builder| builder.deinit(),
