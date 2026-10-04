@@ -368,6 +368,7 @@ pub const Progress = struct {
         self.last_draw_files = self.done_files;
         try self.writer.writeAll("\r\x1b[2K");
         try writeProgressRow(self.writer, self.*, now, null, true);
+        try self.writer.writeByte('\r');
         try self.writer.flush();
     }
 
@@ -619,6 +620,8 @@ pub const Operation = struct {
 
     fn separateOutput(self: *Operation) void {
         if (self.drawn_rows == 0 or !liveProgress(self.writer)) return;
+        self.draw(false) catch {};
+        if (self.drawn_rows == 2) self.writer.writeAll("\x1b[1B") catch {};
         self.writer.writeByte('\n') catch {};
         self.writer.flush() catch {};
         self.drawn_rows = 0;
@@ -676,17 +679,16 @@ pub const Operation = struct {
         const now = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
         self.last_draw_ns = now;
         if (live and self.drawn_rows != 0) {
-            if (self.drawn_rows == 2) try self.writer.writeAll("\x1b[1A");
-            try self.writer.writeAll("\r\x1b[2K");
+            try self.writer.writeAll("\r\x1b[0J");
         }
         try self.writeRow(self.overall, now, if (finished) 100 else @min(99, self.overall.percent()));
         const show_work = live and self.started and self.work != null;
-        if (show_work or (live and self.drawn_rows == 2)) {
+        if (show_work) {
             try self.writer.writeAll("\n\r\x1b[2K");
-            if (show_work) {
-                try self.writeRow(self.work.?, now, null);
-            }
+            try self.writeRow(self.work.?, now, null);
+            try self.writer.writeAll("\x1b[1A");
         }
+        if (live and self.started) try self.writer.writeByte('\r');
         self.drawn_rows = if (show_work) 2 else 1;
         try self.writer.flush();
     }
@@ -862,13 +864,17 @@ test "creation redraws two rows and does not show overall completion before publ
     };
     creation.started = true;
     try creation.draw(false);
+    try std.testing.expect(std.mem.endsWith(u8, output.written(), "\x1b[1A\r"));
+    const redraw = output.written().len;
     try creation.draw(false);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[1A\r\x1b[2KCreating") != null);
+    try std.testing.expect(std.mem.startsWith(u8, output.written()[redraw..], "\r\x1b[0JCreating"));
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "99%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "100%") == null);
+    const stop = output.written().len;
     creation.stop();
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "100%") == null);
-    try std.testing.expect(std.mem.endsWith(u8, output.written(), "\n\r\x1b[2K\n"));
+    try std.testing.expect(std.mem.indexOf(u8, output.written()[stop..], "Publishing") == null);
+    try std.testing.expect(std.mem.endsWith(u8, output.written(), "\n"));
 }
 
 test "operation animates overall and streamed work until it stops" {
@@ -944,7 +950,10 @@ test "operation rows appear only for active work and preserve item labels on reu
     operation.phase("Writing", 1024, 0);
     try operation.draw(false);
     try std.testing.expectEqual(@as(u2, 2), operation.drawn_rows);
+    const before_error = output.written().len;
     try operation.fileError("Writing", "broken.bin", error.AccessDenied);
+    try std.testing.expect(std.mem.startsWith(u8, output.written()[before_error..], "\r\x1b[0J"));
+    try std.testing.expect(std.mem.indexOf(u8, output.written()[before_error..], "\x1b[1B\nError:") != null);
     try std.testing.expectEqual(@as(u2, 0), operation.drawn_rows);
     const error_end = output.written().len;
     try operation.draw(false);
