@@ -412,7 +412,7 @@ fn compareSides(
     const target_fast = canUseExpectedFastPath(target.*);
     const source_managed_scan = needsManagedMembershipScan(source);
     const target_managed_scan = needsManagedMembershipScan(target.*);
-    var comparing: ui.Progress = .{ .io = io, .writer = out, .label = "Comparing", .label_columns = "Reading contents: ".len, .indeterminate = true };
+    var comparing: ui.Progress = .{ .io = io, .writer = out, .label = "Comparing", .indeterminate = true };
     try comparing.start();
     errdefer comparing.abort();
 

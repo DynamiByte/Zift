@@ -168,7 +168,7 @@ pub const Progress = struct {
     io: std.Io,
     writer: *std.Io.Writer,
     label: []const u8,
-    label_columns: usize = 13,
+    label_columns: usize = "Creating file delta: ".len,
     byte_columns: ?ByteColumns = null,
     total_bytes: u64 = 0,
     total_files: usize = 0,
@@ -230,7 +230,6 @@ pub const Progress = struct {
             .io = self.io,
             .writer = self.writer,
             .label = "Reading contents",
-            .label_columns = "Reading contents: ".len,
             .total_files = task_count,
             .total_bytes = byte_count,
             .byte_columns = if (byte_count != 0) .{ .current = widths.current, .total = widths.current } else null,
@@ -522,7 +521,7 @@ pub const Operation = struct {
 
     pub fn start(self: *Operation, label: []const u8) void {
         const now = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
-        self.overall = .{ .io = self.io, .writer = self.writer, .label = label, .label_columns = "Creating file delta: ".len, .indeterminate = true, .start_ns = now };
+        self.overall = .{ .io = self.io, .writer = self.writer, .label = label, .indeterminate = true, .start_ns = now };
         self.work = null;
         self.stopped = .unset;
         self.drawn_rows = 0;
@@ -1028,7 +1027,7 @@ test "terminal progress uses one accent without coloring counts or speed" {
     };
     try progress.finish();
     try std.testing.expectEqualStrings(
-        "\x1b[1mTesting:\x1b[0m     [\x1b[36m#########################\x1b[0m] 100%  1.00 KiB/1.00 KiB  files 2/2          0 B/s\x1b[0m\n",
+        "\x1b[1mTesting:\x1b[0m             [\x1b[36m#########################\x1b[0m] 100%  1.00 KiB/1.00 KiB  files 2/2          0 B/s\x1b[0m\n",
         output.written(),
     );
     try std.testing.expect(!progress.started);
@@ -1071,7 +1070,7 @@ test "reading starts after metadata progress completes and never resets between 
     const previous = streams;
     defer streams = previous;
     streams = .{ .{ .writer = &output.writer, .live = true }, .{} };
-    var progress: Progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Comparing", .label_columns = "Reading contents: ".len, .total_files = 2 };
+    var progress: Progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Comparing", .total_files = 2 };
     try progress.start();
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "Reading") == null);
     try progress.finishFile();
@@ -1181,14 +1180,14 @@ test "bounded progress rows preserve terminal colors without counting escapes as
     const previous = streams;
     defer streams = previous;
     streams = .{ .{ .writer = &output.writer, .live = true, .mode = .escape_codes }, .{} };
-    var progress: Progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Comparing", .label_columns = "Reading contents: ".len, .total_files = 1 };
+    var progress: Progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Comparing", .total_files = 1 };
     try progress.start();
     defer progress.abort();
     try progress.finishFile();
     try progress.startReading(1, 8 * 1024 * 1024);
     try progress.addBytes(8 * 1024 * 1024);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[1mComparing:\x1b[0m        [\x1b[36m>------------------------\x1b[0m]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[1mReading contents:\x1b[0m [\x1b[36m>-------------\x1b[0m]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[1mComparing:\x1b[0m           [\x1b[36m>------------------------\x1b[0m]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[1mReading contents:\x1b[0m    [\x1b[36m>----------\x1b[0m]") != null);
 }
 
 test "early read exits preserve stage geometry and report only physical bytes" {
@@ -1247,6 +1246,34 @@ test "progress reserves byte unit boundaries and speed without counter-dependent
         try std.testing.expectEqual(width, progress.barWidth(80));
         const slash = std.mem.indexOfScalar(u8, output.buffered(), '/').?;
         try std.testing.expectEqualStrings("1.00 MiB", output.buffered()[slash + 1 .. slash + 9]);
+    }
+}
+
+test "progress bars stay aligned between scanning reading and creation" {
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    const previous = streams;
+    defer streams = previous;
+    streams = .{ .{}, .{} };
+    var scanning: Progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Scanning" };
+    try scanning.start();
+    try scanning.finish();
+    var comparing: Progress = .{ .io = std.testing.io, .writer = &output.writer, .label = "Comparing", .total_files = 1 };
+    try comparing.start();
+    try comparing.finishFile();
+    try comparing.startReading(1, 1024);
+    try comparing.finish();
+    var creation: Operation = .{ .io = std.testing.io, .writer = &output.writer };
+    creation.start("Creating");
+    creation.totals(1024, 1);
+    creation.finish();
+
+    const text = output.written();
+    const creating = text[std.mem.indexOf(u8, text, "Creating:").?..];
+    const column = std.mem.indexOfScalar(u8, creating, '[').?;
+    for ([_][]const u8{ "Scanning:", "Comparing:", "Reading contents:" }) |label| {
+        const row = text[std.mem.indexOf(u8, text, label).?..];
+        try std.testing.expectEqual(column, std.mem.indexOfScalar(u8, row, '[').?);
     }
 }
 
