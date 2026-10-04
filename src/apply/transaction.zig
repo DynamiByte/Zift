@@ -2706,7 +2706,7 @@ test "commit accepts listed symlink inside blocking directory" {
     try std.testing.expectEqualStrings("keep", real);
 }
 
-test "commit rollback restores blocking directory" {
+test "commit rollback restores blocking directory and nested children" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2717,21 +2717,24 @@ test "commit rollback restores blocking directory" {
     defer workspace.deinit();
 
     try workspace.ensureDirectory("staged");
-    try tmp.dir.createDir(io, "a", .default_dir);
+    try tmp.dir.createDirPath(io, "a/deep");
     try tmp.dir.writeFile(io, .{ .sub_path = "a/removed", .data = "old" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "a/deep/nested", .data = "nested" });
     var staged = try fs.createGuardedOutputBeneath(io, tmp.dir, ".zift-work/staged/new");
     try staged.writePositionalAll(io, "new", 0);
     var outputs = [_]Output{
         .{ .path = "a", .work_rel = ".zift-work/staged/new", .size = try staged.length(io), .state = .{ .staged = staged } },
     };
 
-    var commit = try testingCommit(allocator, io, tmp.dir, &workspace, &.{"a"}, &.{"a/removed"}, &outputs);
+    var commit = try testingCommit(allocator, io, tmp.dir, &workspace, &.{"a"}, &.{ "a/removed", "a/deep/nested" }, &outputs);
     defer commit.deinit();
     try commit.publish(0);
     try commit.rollback();
 
     const bytes = try tmp.dir.readFileAlloc(io, "a/removed", allocator, .limited(4));
     try std.testing.expectEqualStrings("old", bytes);
+    const nested = try tmp.dir.readFileAlloc(io, "a/deep/nested", allocator, .limited(7));
+    try std.testing.expectEqualStrings("nested", nested);
 }
 
 test "commit rollback restores earlier replacements after later failure" {

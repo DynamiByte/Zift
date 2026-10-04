@@ -426,7 +426,6 @@ pub fn openMetadataBeneathWindows(
     return openMetadataNoFollow(io, parent.dir, parent.basename);
 }
 
-// backup: write/delete exclusion until exact-object rename
 pub fn openBackupAuthorityBeneathWindows(
     io: std.Io,
     root: std.Io.Dir,
@@ -435,7 +434,13 @@ pub fn openBackupAuthorityBeneathWindows(
     if (builtin.target.os.tag != .windows) return error.OperationUnsupported;
     var parent = try openParentBeneath(io, root, sub_path);
     defer parent.close(io);
-    return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{ .READ = true }, false);
+    return openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{
+        .READ = true,
+        .WRITE = true,
+    }, true) catch |err| switch (err) {
+        error.NotDir => openNamespaceAuthorityWindows(io, parent.dir, parent.basename, .{ .READ = true }, false),
+        else => |other| return other,
+    };
 }
 
 // mutation: content writes allowed, DELETE sharing denied
