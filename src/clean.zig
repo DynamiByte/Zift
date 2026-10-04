@@ -94,9 +94,8 @@ pub fn run(
     const complete_active = hasCompleteActiveView(view);
     const authoritative_expected = hasAuthoritativeExpected(view);
     if (!authoritative_expected and verify_md5) {
-        try ui.writeErrorPrefix(out);
-        try out.writeAll(" hash verification is unavailable for this installation\n");
-        return error.Reported;
+        try ui.writeWarningLine(out, "Hashes are unavailable; continuing without hash verification.");
+        try out.flush();
     }
     if (!complete_active) {
         try ui.writeWarningLine(out, "No complete manifest found; report only.");
@@ -818,8 +817,10 @@ test "complete clean without an authoritative manifest is report only" {
 
     var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer output.deinit();
-    try run(allocator, io, root, true, true, false, &output.writer);
+    try run(allocator, io, root, true, true, true, &output.writer);
 
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.written(), "Hashes are unavailable"));
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Hashes are unavailable").? < std.mem.indexOf(u8, output.written(), "Scanning").?);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.written(), "report only"));
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "No complete manifest found; report only.") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "no changes were made") == null);
