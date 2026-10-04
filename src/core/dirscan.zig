@@ -61,7 +61,7 @@ pub fn enumerate(
     defer root_dir.close(io);
 
     if (builtin.target.os.tag == .windows) {
-        const query_buffer = try gpa.alloc(u8, 64 * 1024);
+        const query_buffer = try gpa.alignedAlloc(u8, .of(FileDirectoryInfo), 64 * 1024);
         defer gpa.free(query_buffer);
         try enumerateWindows(allocator, gpa, io, root_dir, ignore_path, &entries, query_buffer);
     } else {
@@ -123,7 +123,7 @@ fn enumerateWindows(
     root: std.Io.Dir,
     ignore_path: ?IgnorePath,
     entries: *std.ArrayList(Entry),
-    query_buffer: []u8,
+    query_buffer: []align(@alignOf(FileDirectoryInfo)) u8,
 ) !void {
     const Frame = struct {
         dir: std.Io.Dir,
@@ -169,7 +169,7 @@ fn enumerateWindowsDirectory(
     prefix: []const u8,
     ignore_path: ?IgnorePath,
     entries: *std.ArrayList(Entry),
-    query_buffer: []u8,
+    query_buffer: []align(@alignOf(FileDirectoryInfo)) u8,
 ) !std.ArrayList([]const u8) {
     var child_directories: std.ArrayList([]const u8) = .empty;
     errdefer freeDirectoryPaths(scratch, &child_directories);
@@ -296,6 +296,23 @@ test "enumeration returns sorted paths and exact sizes" {
     try std.testing.expectEqual(@as(u64, 0), result.entries[1].size);
     try std.testing.expectEqualStrings("z.bin", result.entries[2].path);
     try std.testing.expectEqual(@as(u64, 5), result.entries[2].size);
+}
+
+test "Windows enumeration accepts an unaligned allocator backing buffer" {
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "payload.bin", .data = "payload" });
+    const root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    defer std.testing.allocator.free(root);
+    var storage: [128 * 1024]u8 align(@alignOf(FileDirectoryInfo)) = undefined;
+    var allocator = std.heap.FixedBufferAllocator.init(storage[1..]);
+    var result = try enumerate(allocator.allocator(), io, root, null);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 1), result.entries.len);
+    try std.testing.expectEqualStrings("payload.bin", result.entries[0].path);
+    try std.testing.expectEqual(@as(u64, 7), result.entries[0].size);
 }
 
 test "enumeration prunes ignored directories before descent" {
